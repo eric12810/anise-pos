@@ -35,7 +35,8 @@ TestResults/
 *.ldf
 
 # Runtime credentials, local data and deployment output
-**/data/
+/data/
+/src/data/
 **/App_Data/
 *.db
 *.db-shm
