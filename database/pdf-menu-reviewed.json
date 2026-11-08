@@ -1,0 +1,737 @@
+{
+  "source": "Menu Large Aug 2025shopV2.pdf",
+  "products": [
+    {
+      "category": "Starters",
+      "name": "Spring Rolls",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 6.5
+        }
+      ]
+    },
+    {
+      "category": "Starters",
+      "name": "Prawn Toast",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 7.5
+        }
+      ]
+    },
+    {
+      "category": "Starters",
+      "name": "Crispy Seaweed",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 6.5
+        }
+      ]
+    },
+    {
+      "category": "Starters",
+      "name": "Coconut Prawns",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 8
+        }
+      ]
+    },
+    {
+      "category": "Starters",
+      "name": "Yammy Fish",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 7.5
+        }
+      ]
+    },
+    {
+      "category": "Starters",
+      "name": "Fried Dumpling",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 7.5
+        }
+      ]
+    },
+    {
+      "category": "Starters",
+      "name": "Crispy Aromatic Duck",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 12.5
+        }
+      ]
+    },
+    {
+      "category": "Starters",
+      "name": "Treasured Capital Spare Ribs",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 8.5
+        }
+      ]
+    },
+    {
+      "category": "Starters",
+      "name": "Osmanthus Nectar Rib Ends",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 7.5
+        }
+      ]
+    },
+    {
+      "category": "Starters",
+      "name": "Korean Chicken",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 7.5
+        }
+      ]
+    },
+    {
+      "category": "Starters",
+      "name": "Grilled Satay Chicken",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 7.5
+        }
+      ]
+    },
+    {
+      "category": "Starters",
+      "name": "Smoked Chicken",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 7.5
+        }
+      ]
+    },
+    {
+      "category": "Starters",
+      "name": "Salt and Pepper Prawns",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 7.5
+        }
+      ]
+    },
+    {
+      "category": "Starters",
+      "name": "Salt and Pepper Tofu",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 7.5
+        }
+      ]
+    },
+    {
+      "category": "Starters",
+      "name": "Salt and Pepper Wings",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 7.5
+        }
+      ]
+    },
+    {
+      "category": "Soup",
+      "name": "Won Ton Soup",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 5.8
+        }
+      ]
+    },
+    {
+      "category": "Soup",
+      "name": "Prawns Sweetcorn Soup",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 5.8
+        }
+      ]
+    },
+    {
+      "category": "Soup",
+      "name": "Chicken Sweetcorn Soup",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 5.5
+        }
+      ]
+    },
+    {
+      "category": "Soup",
+      "name": "Hot and Sour Soup",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 5.5
+        }
+      ]
+    },
+    {
+      "category": "Soup",
+      "name": "Mushroom Sweetcorn Soup",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 5.5
+        }
+      ]
+    },
+    {
+      "category": "Anise Creations",
+      "name": "Sweet & Sour Meatballs",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 8
+        }
+      ]
+    },
+    {
+      "category": "Anise Creations",
+      "name": "Anise Rice Croquettes",
+      "variants": [
+        {
+          "name": "Hoi Sin Duck",
+          "price": 7
+        },
+        {
+          "name": "Mushroom",
+          "price": 7
+        }
+      ]
+    },
+    {
+      "category": "Anise Creations",
+      "name": "Sweet and Sour Tofu Nuggets",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 8.5
+        }
+      ]
+    },
+    {
+      "category": "Chicken",
+      "name": "Jue Jue Chicken",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 8.8
+        }
+      ]
+    },
+    {
+      "category": "Chicken",
+      "name": "Chilli Chicken",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 8.8
+        }
+      ]
+    },
+    {
+      "category": "Chicken",
+      "name": "Chicken with Cashew Nuts",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 8.8
+        }
+      ]
+    },
+    {
+      "category": "Chicken",
+      "name": "Sweet and Sour Chicken",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 8.8
+        }
+      ]
+    },
+    {
+      "category": "Chicken",
+      "name": "'Gordon's Gin' Infused Lemon Chicken",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 9.8
+        }
+      ]
+    },
+    {
+      "category": "Beef",
+      "name": "Beef Sirloin with Black Pepper",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 11.8
+        }
+      ]
+    },
+    {
+      "category": "Beef",
+      "name": "Beef Sirloin in Black Bean Sauce",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 11.8
+        }
+      ]
+    },
+    {
+      "category": "Beef",
+      "name": "Beef Sirloin in Cantonese Style",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 11.8
+        }
+      ]
+    },
+    {
+      "category": "Beef",
+      "name": "Crispy Chilli Beef",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 9.5
+        }
+      ]
+    },
+    {
+      "category": "Lamb",
+      "name": "Lamb Curry with Sweet Potatoes",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 9
+        }
+      ]
+    },
+    {
+      "category": "Lamb",
+      "name": "Stir Fried Lamb with Leek",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 9
+        }
+      ]
+    },
+    {
+      "category": "Seafood",
+      "name": "Steamed Sea Bass Fillet",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 13
+        }
+      ]
+    },
+    {
+      "category": "Seafood",
+      "name": "Prawns with Exotic Mushrooms",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 11.5
+        }
+      ]
+    },
+    {
+      "category": "Seafood",
+      "name": "Drunken Prawn",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 9.5
+        }
+      ]
+    },
+    {
+      "category": "Seafood",
+      "name": "Szechuan Prawns",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 9.5
+        }
+      ]
+    },
+    {
+      "category": "Vegetables",
+      "name": "Braised Tofu",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 8.5
+        }
+      ]
+    },
+    {
+      "category": "Vegetables",
+      "name": "Sea Spice Aubergine",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 8.5
+        }
+      ]
+    },
+    {
+      "category": "Vegetables",
+      "name": "Mange Tout and French Beans",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 8.5
+        }
+      ]
+    },
+    {
+      "category": "Vegetables",
+      "name": "Pak Choi in Oyster Sauce",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 8.5
+        }
+      ]
+    },
+    {
+      "category": "Rice",
+      "name": "Smoky Chicken Fried Rice",
+      "variants": [
+        {
+          "name": "500ml",
+          "price": 7
+        },
+        {
+          "name": "750ml",
+          "price": 8.5
+        }
+      ]
+    },
+    {
+      "category": "Rice",
+      "name": "Crispy Duck Fried Rice",
+      "variants": [
+        {
+          "name": "500ml",
+          "price": 7
+        },
+        {
+          "name": "750ml",
+          "price": 8.5
+        }
+      ]
+    },
+    {
+      "category": "Rice",
+      "name": "Special Fried Rice",
+      "variants": [
+        {
+          "name": "500ml",
+          "price": 6.5
+        },
+        {
+          "name": "750ml",
+          "price": 8
+        }
+      ]
+    },
+    {
+      "category": "Rice",
+      "name": "King Prawn Fried Rice",
+      "variants": [
+        {
+          "name": "500ml",
+          "price": 6.5
+        },
+        {
+          "name": "750ml",
+          "price": 8
+        }
+      ]
+    },
+    {
+      "category": "Rice",
+      "name": "Vegetable Fried Rice",
+      "variants": [
+        {
+          "name": "500ml",
+          "price": 6
+        },
+        {
+          "name": "750ml",
+          "price": 7.5
+        }
+      ]
+    },
+    {
+      "category": "Rice",
+      "name": "Egg Fried Rice",
+      "variants": [
+        {
+          "name": "500ml",
+          "price": 5.5
+        },
+        {
+          "name": "750ml",
+          "price": 7
+        }
+      ]
+    },
+    {
+      "category": "Rice",
+      "name": "Steamed Rice",
+      "variants": [
+        {
+          "name": "500ml",
+          "price": 4
+        },
+        {
+          "name": "750ml",
+          "price": 5
+        }
+      ]
+    },
+    {
+      "category": "Noodles",
+      "name": "Singapore Rice Noodles",
+      "variants": [
+        {
+          "name": "500ml",
+          "price": 6.5
+        },
+        {
+          "name": "750ml",
+          "price": 8
+        }
+      ]
+    },
+    {
+      "category": "Noodles",
+      "name": "Vegetable Rice Noodles",
+      "variants": [
+        {
+          "name": "500ml",
+          "price": 6
+        },
+        {
+          "name": "750ml",
+          "price": 7.5
+        }
+      ]
+    },
+    {
+      "category": "Noodles",
+      "name": "King Prawn Chow Mein",
+      "variants": [
+        {
+          "name": "500ml",
+          "price": 6.5
+        },
+        {
+          "name": "750ml",
+          "price": 8
+        }
+      ]
+    },
+    {
+      "category": "Noodles",
+      "name": "Chicken Chow Mein",
+      "variants": [
+        {
+          "name": "500ml",
+          "price": 6
+        },
+        {
+          "name": "750ml",
+          "price": 7.5
+        }
+      ]
+    },
+    {
+      "category": "Noodles",
+      "name": "Vegetable Chow Mein",
+      "variants": [
+        {
+          "name": "500ml",
+          "price": 6
+        },
+        {
+          "name": "750ml",
+          "price": 7.5
+        }
+      ]
+    },
+    {
+      "category": "Noodles",
+      "name": "Noodles with Beansprout",
+      "variants": [
+        {
+          "name": "500ml",
+          "price": 5
+        },
+        {
+          "name": "750ml",
+          "price": 6.5
+        }
+      ]
+    },
+    {
+      "category": "Drinks",
+      "name": "Coke 330ml",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 2.3
+        }
+      ]
+    },
+    {
+      "category": "Drinks",
+      "name": "Diet Coke 330ml",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 2
+        }
+      ]
+    },
+    {
+      "category": "Drinks",
+      "name": "Orange 330ml",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 2
+        }
+      ]
+    },
+    {
+      "category": "Drinks",
+      "name": "7-Up 330ml",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 2
+        }
+      ]
+    },
+    {
+      "category": "Drinks",
+      "name": "Still Water 330ml",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 1.5
+        }
+      ]
+    },
+    {
+      "category": "Drinks",
+      "name": "Still/Sparkling Water 750ml",
+      "variants": [
+        {
+          "name": "Still",
+          "price": 3.5
+        },
+        {
+          "name": "Sparkling",
+          "price": 3.5
+        }
+      ]
+    },
+    {
+      "category": "Other",
+      "name": "Phoenix Roll",
+      "variants": [
+        {
+          "name": "Apple Cinnamon",
+          "price": 6
+        },
+        {
+          "name": "Tropical Pineapple",
+          "price": 6
+        },
+        {
+          "name": "Nutty Nutella",
+          "price": 6
+        },
+        {
+          "name": "Combo of all three",
+          "price": 6
+        }
+      ]
+    },
+    {
+      "category": "Other",
+      "name": "Sauces",
+      "variants": [
+        {
+          "name": "Curry Sauce",
+          "price": 2
+        },
+        {
+          "name": "Sweet & Sour Sauce",
+          "price": 2
+        },
+        {
+          "name": "Chilli Oil",
+          "price": 2
+        },
+        {
+          "name": "Sweet Chilli Sauce",
+          "price": 2
+        },
+        {
+          "name": "Hoi Sin Sauce",
+          "price": 2
+        },
+        {
+          "name": "Satay Sauce",
+          "price": 2
+        }
+      ]
+    },
+    {
+      "category": "Other",
+      "name": "Prawn Cracker",
+      "variants": [
+        {
+          "name": "Regular",
+          "price": 2.5
+        }
+      ]
+    }
+  ]
+}

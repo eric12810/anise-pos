@@ -1,0 +1,6 @@
+@AnisePOS.Api_HostAddress = http://localhost:0
+
+GET {{AnisePOS.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

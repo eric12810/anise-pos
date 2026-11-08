@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Anise — Order queue</title>
+<style>
+body:not(.authenticated) main,body:not(.authenticated) .toolbar{display:none}
+*{box-sizing:border-box}body{margin:0;background:#f6f5ef;color:#20352a;font:16px system-ui,sans-serif}
+header{padding:18px 24px;background:white;display:flex;gap:20px;flex-wrap:wrap;align-items:center;border-bottom:1px solid #dbe2d9}
+h1{font-size:23px;margin:0}a{color:#2c6447}#staff{margin-left:auto}
+.toolbar{padding:16px 24px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}#message{margin:0 24px 16px;color:#a32929}
+main{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;padding:0 24px 24px}
+h2{font-size:18px}.card{background:white;border:1px solid #dbe2d9;border-top:5px solid #bd9146;border-radius:10px;padding:18px;margin-bottom:16px}
+.preparing .card{border-top-color:#4e7da1}.ready .card{border-top-color:#2c6447}
+h3{font-size:20px;margin:0 0 8px}.detail{color:#526458;font-size:14px;white-space:pre-wrap;overflow-wrap:anywhere}
+ul{padding-left:20px}li{margin:10px 0;overflow-wrap:anywhere}.note{background:#fff2d9;padding:10px;white-space:pre-wrap;overflow-wrap:anywhere}
+button{min-height:46px;padding:10px 16px;border:1px solid #bdcdbf;border-radius:7px;background:white;color:#20352a;font:inherit;cursor:pointer}
+.payment{margin:12px 0 0;padding:8px 10px;border-radius:6px;background:#fff0d5;color:#805300;font-weight:700}.payment.paid{background:#e6f4e9;color:#24613b}.payment.missing{background:#eee;color:#666}.payment-action{width:100%;margin-top:8px;background:#fff7e8;border-color:#d6a24c;font-weight:700}.receipt-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}.receipt-actions a{display:flex;align-items:center;justify-content:center;min-height:42px;padding:8px;border:1px solid #bdcdbf;border-radius:7px;background:#fff;text-align:center;text-decoration:none}.advance{width:100%;background:#2c6447;border:0;color:white;font-weight:700;margin-top:12px}button:disabled{opacity:.55;cursor:wait}
+.accept-form{margin-top:12px}.accept-form label{display:grid;gap:6px;font-size:14px;font-weight:600}.accept-form input{width:100%;padding:10px;border:1px solid #bdcdbf;border-radius:7px;font:inherit}.decline-order{width:100%;margin-top:8px;border-color:#a32929;color:#a32929}.empty{color:#687a6b;font-size:14px}
+@media(max-width:850px){main{grid-template-columns:1fr}header,.toolbar{padding:16px}main{padding:0 16px 16px}}
+</style>
+</head>
+<body>
+<header><h1>Order queue</h1><a href="/pos.html">POS</a><a href="/history.html">Order history</a><a href="/menu-admin.html">Menu manager</a><a href="/reports.html">Reports</a><span id="staff"></span></header>
+<div class="toolbar"><button id="refresh">Refresh</button><button id="sound-toggle" type="button">Enable order sound</button><span id="sound-status" role="status">Order sound is off.</span><span id="updated" role="status">Loading orders…</span></div>
+<p id="message" role="alert">Checking staff sign-in…</p>
+<main>
+<section><h2 id="new-title">New</h2><div id="new"></div></section>
+<section class="preparing"><h2 id="preparing-title">Preparing</h2><div id="preparing"></div></section>
+<section class="ready"><h2 id="ready-title">Ready</h2><div id="ready"></div></section>
+</main>
+<script src="/orders.js?v=20261030-minutes-sound4"></script>
+</body>
+</html>

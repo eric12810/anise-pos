@@ -1,0 +1,33 @@
+name: POS staging dry run
+
+on:
+  push:
+    branches: [staging]
+  pull_request:
+    branches: [main, staging]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+      - name: Restore
+        run: dotnet restore AnisePOS.sln
+      - name: Build
+        run: dotnet build AnisePOS.sln --configuration Release --no-restore
+      - name: Check order transitions without starting the API
+        run: dotnet run --project tests/AnisePOS.Checks --configuration Release --no-build
+      - name: Prepare package without connecting to hosting
+        run: dotnet publish src/AnisePOS.Api/AnisePOS.Api.csproj --configuration Release --no-restore --no-self-contained -p:UseAppHost=false --output artifacts/staging
+      - name: Review package and create manifest
+        run: python3 scripts/review-staging-package.py

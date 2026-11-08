@@ -1,0 +1,44 @@
+# Local configuration and secrets: review before adding any exceptions.
+appsettings*.json
+launchSettings.json
+.env
+.env.*
+*.env
+*.key
+*.pem
+*.p12
+*.pfx
+*.publishsettings
+*.pubxml
+*.pubxml.user
+secrets*.json
+credentials*.json
+client_secret*.json
+
+# Build output and local tooling
+**/bin/
+**/obj/
+TestResults/
+.vs/
+.vscode/
+*.user
+*.suo
+.DS_Store
+**/.DS_Store
+
+# Local backups and databases
+*.bak
+*.backup
+*.zip
+*.sqlbak
+*.mdf
+*.ldf
+
+# Runtime credentials, local data and deployment output
+**/data/
+**/App_Data/
+*.db
+*.db-shm
+*.db-wal
+*.log
+artifacts/
