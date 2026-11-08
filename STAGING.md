@@ -14,7 +14,8 @@ Confirmed by the user:
 - Site: `https://pos-staging.loveanise.co.uk`.
 - SolidCP Home Folder: `\pos-staging.loveanise.co.uk\wwwroot`.
 - FTPS host: `wsuk32.pronameserver.com`, port 21, explicit TLS.
-- Account: `stageposftp`, login root `/`, mapped to the staging site root.
+- Account: `stageposftp`, login folder `/stageposftp`; deployment folder `/stageposftp/wwwroot`.
+  Sibling `data` and `logs` folders are outside deployment.
 - `anisedb` backed up; staging configured for `anisedb`, not `anisedatabase`.
 - The three `STAGING_FTPS_*` repository secrets have been saved in GitHub.
 

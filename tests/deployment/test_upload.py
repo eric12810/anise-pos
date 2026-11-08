@@ -15,12 +15,15 @@ class FakeFTP:
         self.files = {name: b'original' for name in existing}
         self.fail = fail
         self.deleted = []
+        self.directories = []
 
     def mlsd(self):
         return [(name, {'type': 'file'}) for name in self.files]
 
     def cwd(self, path):
-        pass
+        self.directories.append(path)
+        if path.startswith("/") and path != upload.REMOTE_ROOT:
+            raise AssertionError("Operation outside staging wwwroot")
 
     def storbinary(self, command, stream):
         name = command[5:]
@@ -52,6 +55,7 @@ class UploadTests(unittest.TestCase):
         self.assertEqual(ftp.files['appsettings.json'], b'original')
         self.assertEqual(ftp.files['other.dll'], b'original')
         self.assertEqual(ftp.deleted, ['app_offline.htm'])
+        self.assertEqual(ftp.directories, [upload.REMOTE_ROOT] * 3)
 
     @patch.object(upload.time, 'sleep')
     def test_failure_leaves_site_offline(self, _):

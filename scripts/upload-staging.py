@@ -10,6 +10,7 @@ import time
 
 HOST = 'wsuk32.pronameserver.com'
 USER = 'stageposftp'
+REMOTE_ROOT = '/stageposftp/wwwroot'
 CONFIRMATION = 'DEPLOY pos-staging.loveanise.co.uk'
 
 
@@ -46,6 +47,7 @@ def directory_names(ftp):
 
 
 def upload(ftp, files):
+    ftp.cwd(REMOTE_ROOT)
     names = {name.lower() for name in directory_names(ftp)}
     if 'app_offline.htm' in names:
         raise RuntimeError('Site already offline; inspect it before retrying.')
@@ -57,7 +59,7 @@ def upload(ftp, files):
         if name.lower() == 'web.config' and preserve_config:
             print('Preserving existing web.config')
             continue
-        ftp.cwd('/')
+        ftp.cwd(REMOTE_ROOT)
         for part in PurePosixPath(name).parent.parts:
             children = directory_names(ftp)
             if part not in children:
@@ -70,7 +72,7 @@ def upload(ftp, files):
         if received.hexdigest() != digest:
             raise RuntimeError('Remote file verification failed; site remains offline.')
         print('Verified: ' + name)
-    ftp.cwd('/')
+    ftp.cwd(REMOTE_ROOT)
     # This is the only deletion: the temporary marker created by this run.
     ftp.delete('app_offline.htm')
     print('Staging files uploaded and verified; maintenance marker removed.')
@@ -98,10 +100,10 @@ def main():
         print('Step: encrypt data channel', flush=True)
         ftp.prot_p()
         print('Step: select staging root', flush=True)
-        ftp.cwd('/')
+        ftp.cwd(REMOTE_ROOT)
         print('Step: list staging root', flush=True)
         directory_names(ftp)
-        print('Verified TLS connection and encrypted directory listing at staging account root.')
+        print('Verified TLS connection and encrypted directory listing at /stageposftp/wwwroot.')
         if args.deploy:
             upload(ftp, files)
         else:
