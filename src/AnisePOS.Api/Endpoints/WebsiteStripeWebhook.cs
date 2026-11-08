@@ -79,12 +79,12 @@ public static class WebsiteStripeWebhook
                 if (snapshot?.Lines is null || snapshot.Lines.Count == 0 || snapshot.Total != checkout.Total ||
                     snapshot.OrderType is not (OrderType.Collection or OrderType.Delivery) ||
                     snapshot.Lines.Any(l => l.Quantity < 1 || l.Modifiers is null) ||
-                    snapshot.Lines.Sum(l => l.LineTotal) != snapshot.Subtotal || snapshot.Subtotal + snapshot.DeliveryFee != checkout.Total)
+                    snapshot.Lines.Sum(l => l.LineTotal) != snapshot.Subtotal || snapshot.DiscountTotal < 0 || snapshot.DiscountTotal > snapshot.Subtotal + snapshot.DeliveryFee || snapshot.Subtotal + snapshot.DeliveryFee - snapshot.DiscountTotal != checkout.Total)
                     return Results.Problem("Saved checkout could not be processed.", statusCode: 500);
                 var order = new Order { OrderType = snapshot.OrderType, Status = OrderStatus.Placed,
                     CustomerName = snapshot.CustomerName, CustomerPhone = snapshot.CustomerPhone,
-                    DeliveryAddress = snapshot.DeliveryAddress, Subtotal = snapshot.Subtotal,
-                    DeliveryFee = snapshot.DeliveryFee, Total = snapshot.Total };
+                    DeliveryAddress = snapshot.DeliveryAddress, Notes = snapshot.Notes, Subtotal = snapshot.Subtotal,
+                    DeliveryFee = snapshot.DeliveryFee, DiscountTotal = snapshot.DiscountTotal, Total = snapshot.Total };
                 foreach (var line in snapshot.Lines)
                 {
                     order.Lines.Add(new OrderLine { ProductId = line.ProductId, ProductVariantId = line.ProductVariantId,
@@ -98,6 +98,10 @@ public static class WebsiteStripeWebhook
                     Amount = checkout.Total, Provider = "StripeCheckout", ProviderReference = paid.SessionId, PaidAtUtc = now });
                 order.StatusHistory.Add(new OrderStatusHistory { Status = OrderStatus.Placed, Note = "Website card payment confirmed by Stripe" });
                 db.Orders.Add(order);
+                if (snapshot.RecordPromoRedemption && !string.IsNullOrWhiteSpace(snapshot.PromoCode) && !string.IsNullOrWhiteSpace(snapshot.CustomerPhone))
+                    db.PromoRedemptions.Add(new PromoRedemption { Code = snapshot.PromoCode, Phone = PromoCodes.NormalizePhone(snapshot.CustomerPhone), OrderId = order.Id });
+                if (!string.IsNullOrEmpty(snapshot.ProtectedConfirmation))
+                    db.WebsiteConfirmations.Add(new WebsiteConfirmation { Order = order, ProtectedPayload = snapshot.ProtectedConfirmation });
                 checkout.CompletedOrderId = order.Id; checkout.UpdatedAtUtc = now;
                 await db.SaveChangesAsync(ct);
                 await transaction.CommitAsync(ct);
@@ -107,7 +111,7 @@ public static class WebsiteStripeWebhook
     }
 
     private sealed record CheckoutSnapshot(OrderType OrderType, string? CustomerName, string? CustomerPhone,
-        string? DeliveryAddress, decimal Subtotal, decimal DeliveryFee, decimal Total, List<SnapshotLine> Lines);
+        string? DeliveryAddress, decimal Subtotal, decimal DeliveryFee, decimal Total, List<SnapshotLine> Lines, string? Notes = null, string? ProtectedConfirmation = null, decimal DiscountTotal = 0, string? PromoCode = null, bool RecordPromoRedemption = false);
     private sealed record SnapshotLine(Guid? ProductId, Guid? ProductVariantId, string ProductName, string VariantName,
         decimal UnitPrice, int Quantity, decimal LineTotal, string? Notes, List<SnapshotModifier> Modifiers);
     private sealed record SnapshotModifier(Guid? ModifierId, string ModifierName, decimal PriceAdjustment);

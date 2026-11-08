@@ -2,6 +2,7 @@ using AnisePOS.Api.Data;
 using AnisePOS.Api.Endpoints;
 using AnisePOS.Api.Printing;
 using AnisePOS.Api.Email;
+using AnisePOS.Api.Notifications;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
@@ -29,6 +30,8 @@ builder.Services.AddHttpClient();
 builder.Services.AddSingleton<GoogleMailTokenStore>();
 builder.Services.AddSingleton<GmailConfirmationSender>();
 builder.Services.AddHostedService<WebsiteConfirmationWorker>();
+builder.Services.AddSingleton<PushKeyStore>();
+builder.Services.AddHostedService<StaffPushWorker>();
 builder.Services.AddSingleton<ReceiptPrinter>();
 builder.Services.AddRateLimiter(options => options.AddFixedWindowLimiter("website-checkout", limiter =>
 {
@@ -37,9 +40,15 @@ builder.Services.AddRateLimiter(options => options.AddFixedWindowLimiter("websit
     limiter.QueueLimit = 0;
     limiter.AutoReplenishment = true;
 }));
+builder.Services.AddRateLimiter(options => options.AddPolicy("website-offers", context =>
+    RateLimitPartition.GetFixedWindowLimiter(context.Connection.RemoteIpAddress?.ToString() ?? "unknown", _ =>
+        new FixedWindowRateLimiterOptions { PermitLimit = 20, Window = TimeSpan.FromMinutes(1), QueueLimit = 0, AutoReplenishment = true })));
 builder.Services.AddRateLimiter(options => options.AddPolicy("website-status", context =>
     RateLimitPartition.GetFixedWindowLimiter(context.Connection.RemoteIpAddress?.ToString() ?? "unknown", _ =>
         new FixedWindowRateLimiterOptions { PermitLimit = 60, Window = TimeSpan.FromMinutes(1), QueueLimit = 0, AutoReplenishment = true })));
+builder.Services.AddRateLimiter(options => options.AddPolicy("website-availability", context =>
+    RateLimitPartition.GetFixedWindowLimiter(context.Connection.RemoteIpAddress?.ToString() ?? "unknown", _ =>
+        new FixedWindowRateLimiterOptions { PermitLimit = 600, Window = TimeSpan.FromMinutes(1), QueueLimit = 0, AutoReplenishment = true })));
 builder.Services.AddRateLimiter(options => options.AddFixedWindowLimiter("staff-login", limiter =>
 {
     limiter.PermitLimit = 10;
@@ -74,6 +83,39 @@ await using (var scope = app.Services.CreateAsyncScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AniseDbContext>();
     await db.Database.ExecuteSqlRawAsync("""
+        IF OBJECT_ID('dbo.StaffPushSubscriptions', 'U') IS NULL
+        BEGIN
+            CREATE TABLE dbo.StaffPushSubscriptions (Id uniqueidentifier NOT NULL PRIMARY KEY, EndpointHash nvarchar(64) NOT NULL, ProtectedSubscription nvarchar(max) NOT NULL, StaffId nvarchar(100) NOT NULL, CreatedAtUtc datetimeoffset(0) NOT NULL, UpdatedAtUtc datetimeoffset(0) NULL);
+            CREATE UNIQUE INDEX UX_StaffPushSubscriptions_EndpointHash ON dbo.StaffPushSubscriptions(EndpointHash);
+        END;
+        IF OBJECT_ID('dbo.StaffPushDeliveries', 'U') IS NULL
+        BEGIN
+            CREATE TABLE dbo.StaffPushDeliveries (Id uniqueidentifier NOT NULL PRIMARY KEY, SubscriptionId uniqueidentifier NOT NULL, OrderId uniqueidentifier NOT NULL, State nvarchar(16) NOT NULL, Attempts int NOT NULL, NextAttemptAtUtc datetimeoffset(0) NULL, CreatedAtUtc datetimeoffset(0) NOT NULL, UpdatedAtUtc datetimeoffset(0) NULL);
+            CREATE UNIQUE INDEX UX_StaffPushDeliveries_Subscription_Order ON dbo.StaffPushDeliveries(SubscriptionId, OrderId);
+        END;
+        IF OBJECT_ID('dbo.DeliverySettings', 'U') IS NULL
+            CREATE TABLE dbo.DeliverySettings (Id int NOT NULL PRIMARY KEY CHECK (Id = 1), RadiusMiles decimal(6,2) NOT NULL CHECK (RadiusMiles >= 0 AND RadiusMiles <= 100), Fee decimal(10,2) NOT NULL CHECK (Fee >= 0 AND Fee <= 1000));
+        IF COL_LENGTH('dbo.DeliverySettings', 'Mode') IS NULL
+            ALTER TABLE dbo.DeliverySettings ADD Mode nvarchar(16) NOT NULL CONSTRAINT DF_DeliverySettings_Mode DEFAULT 'radius';
+        IF COL_LENGTH('dbo.DeliverySettings', 'SectorsJson') IS NULL
+            ALTER TABLE dbo.DeliverySettings ADD SectorsJson nvarchar(max) NOT NULL CONSTRAINT DF_DeliverySettings_Sectors DEFAULT '[]';
+        IF COL_LENGTH('dbo.DeliverySettings', 'RadiusBandsJson') IS NULL
+            ALTER TABLE dbo.DeliverySettings ADD RadiusBandsJson nvarchar(max) NOT NULL CONSTRAINT DF_DeliverySettings_RadiusBands DEFAULT '[]';
+        IF COL_LENGTH('dbo.DeliverySettings', 'OrderingAvailabilityJson') IS NULL
+            ALTER TABLE dbo.DeliverySettings ADD OrderingAvailabilityJson nvarchar(max) NULL;
+        IF COL_LENGTH('dbo.DeliverySettings', 'OrderSound') IS NULL
+            ALTER TABLE dbo.DeliverySettings ADD OrderSound nvarchar(20) NULL;
+        IF COL_LENGTH('dbo.DeliverySettings', 'PrinterIpAddress') IS NULL
+            ALTER TABLE dbo.DeliverySettings ADD PrinterIpAddress nvarchar(15) NULL;
+        IF COL_LENGTH('dbo.DeliverySettings', 'PromoCodesJson') IS NULL
+            ALTER TABLE dbo.DeliverySettings ADD PromoCodesJson nvarchar(max) NULL;
+        IF OBJECT_ID('dbo.Promotions', 'U') IS NULL
+            CREATE TABLE dbo.Promotions (Id uniqueidentifier NOT NULL PRIMARY KEY, SettingsJson nvarchar(max) NOT NULL, ImageData varbinary(max) NULL, ImageContentType nvarchar(20) NULL, CreatedAtUtc datetimeoffset(0) NOT NULL, UpdatedAtUtc datetimeoffset(0) NULL);
+        IF OBJECT_ID('dbo.PromoRedemptions', 'U') IS NULL
+        BEGIN
+            CREATE TABLE dbo.PromoRedemptions (Id uniqueidentifier NOT NULL PRIMARY KEY, Code nvarchar(40) NOT NULL, Phone nvarchar(20) NOT NULL, OrderId uniqueidentifier NOT NULL, CreatedAtUtc datetimeoffset(0) NOT NULL, UpdatedAtUtc datetimeoffset(0) NULL);
+            CREATE INDEX IX_PromoRedemptions_Code_Phone ON dbo.PromoRedemptions(Code, Phone);
+        END;
         IF OBJECT_ID('dbo.WebsiteCheckouts', 'U') IS NULL
         BEGIN
             CREATE TABLE dbo.WebsiteCheckouts (Id uniqueidentifier NOT NULL PRIMARY KEY, RequestId uniqueidentifier NOT NULL, RequestHash nvarchar(64) NOT NULL, SnapshotJson nvarchar(max) NOT NULL, Total decimal(10,2) NOT NULL, StripeSessionId nvarchar(255) NULL, StripeSessionUrl nvarchar(2048) NULL, CompletedOrderId uniqueidentifier NULL, CreatedAtUtc datetimeoffset(0) NOT NULL, UpdatedAtUtc datetimeoffset(0) NULL);
@@ -136,11 +178,19 @@ app.Use(async (context, next) =>
     context.Response.Headers["Referrer-Policy"] = "same-origin";
     await next();
 });
-app.UseStaticFiles();
+app.UseStaticFiles(new StaticFileOptions
+{
+    OnPrepareResponse = context =>
+    {
+        if (context.File.Name is "pos.html" or "orders.html" or "orders.js")
+            context.Context.Response.Headers.CacheControl = "no-cache";
+    }
+});
 app.UseCors();
 app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
+app.MapGet("/", () => Results.Redirect("/staff-login.html"));
 app.MapGet("/health", async (AniseDbContext db, CancellationToken ct) =>
     await db.Database.CanConnectAsync(ct) ? Results.Ok(new { status = "ok", database = "ok" }) : Results.Problem("Database unavailable.", statusCode: 503));
 app.MapMenuEndpoints();
@@ -149,8 +199,11 @@ app.MapWebsiteOrderEndpoints();
 app.MapGoogleMailOAuthEndpoints();
 app.MapWebsiteStripeWebhook();
 app.MapOrderQueueEndpoints();
+app.MapStaffPushEndpoints();
+
 app.MapReportEndpoints();
 app.MapAdminEndpoints();
+app.MapPromotionEndpoints();
 app.MapStaffAuthEndpoints();
 
 app.Run();

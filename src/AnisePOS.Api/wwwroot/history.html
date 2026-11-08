@@ -16,9 +16,9 @@ label{display:grid;gap:6px;font-size:13px;font-weight:700;color:#526458}input,se
 @media(max-width:1000px){.filters{grid-template-columns:repeat(2,1fr)}.filters .search{grid-column:1/-1}.order{grid-template-columns:1fr 1fr}.actions{grid-column:1/-1}}
 @media(max-width:580px){header,.filters,main{padding-left:14px;padding-right:14px}.filters{grid-template-columns:1fr}.filters .search{grid-column:auto}.order{grid-template-columns:1fr}.actions{grid-column:auto}.detail{grid-column:auto}#staff{width:100%;margin-left:0}}
 </style>
-</head>
+<link rel="stylesheet" href="/pos-navigation.css?v=4"><script defer src="/pos-navigation.js?v=4"></script><link rel="manifest" href="/pos.webmanifest"><link rel="apple-touch-icon" href="/pos-icon.png"><meta name="theme-color" content="#2c6447"></head>
 <body>
-<header><h1>Order history</h1><a href="/pos.html">POS</a><a href="/orders.html">Order queue</a><a href="/menu-admin.html">Menu manager</a><a href="/reports.html">Reports</a><span id="staff"></span></header>
+<header class="pos-header"><h1>Order history</h1><nav class="pos-navigation" aria-label="POS navigation"><a href="/pos.html">POS</a><a href="/orders.html">Order queue</a><a href="/history.html">Order history</a><a href="/menu-admin.html" data-roles="Owner,Manager" hidden>Menu manager</a><a href="/reports.html" data-roles="Owner,Manager" hidden>Reports</a><a href="/website-settings.html" data-roles="Owner,Manager" hidden>Settings</a><a href="/staff-admin.html" data-roles="Owner" hidden>Staff</a></nav><span id="staff"></span></header>
 <form class="filters" id="filters">
   <label class="search">Order number, name, phone or address<input id="query" autocomplete="off" placeholder="Search orders"></label>
   <label>Status<select id="status"><option value="">All statuses</option><option>Draft</option><option>Placed</option><option>Accepted</option><option>Preparing</option><option>Ready</option><option>Completed</option><option>Cancelled</option><option>Refunded</option></select></label>

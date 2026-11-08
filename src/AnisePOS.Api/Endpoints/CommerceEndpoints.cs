@@ -9,6 +9,9 @@ namespace AnisePOS.Api.Endpoints;
 
 public static class CommerceEndpoints
 {
+    public static bool ValidPosEstimate(OrderType type, int? minutes) => minutes is null ||
+        (type is OrderType.Collection or OrderType.Delivery && minutes > 0 && minutes <= 1440 &&
+         minutes % (type == OrderType.Collection ? 5 : 10) == 0);
     private static async Task<Dictionary<(Guid CategoryId, Guid ProductId), int>> ProductPositions(AniseDbContext db)
     {
         var links = await db.Set<Dictionary<string, object>>("ProductCategories").AsNoTracking()
@@ -354,6 +357,8 @@ public static class CommerceEndpoints
                 return Results.ValidationProblem(new Dictionary<string, string[]> { ["lines"] = ["An order needs at least one line with a positive quantity."] });
             if (request.PaymentMethod is not PaymentMethod.Cash and not PaymentMethod.Card)
                 return Results.ValidationProblem(new Dictionary<string, string[]> { ["paymentMethod"] = ["Choose Cash or Card."] });
+            if (!ValidPosEstimate(request.OrderType, request.EstimatedMinutes))
+                return Results.ValidationProblem(new Dictionary<string, string[]> { ["estimatedMinutes"] = ["Choose a valid estimate in 5-minute collection or 10-minute delivery increments."] });
 
             var variantIds = request.Lines.Select(line => line.VariantId).Distinct().ToList();
             var variants = await db.ProductVariants.Include(variant => variant.Product).ThenInclude(product => product.ModifierGroups).ThenInclude(link => link.ModifierGroup).ThenInclude(group => group.Modifiers)
@@ -361,6 +366,7 @@ public static class CommerceEndpoints
             if (variants.Count != variantIds.Count) return Results.ValidationProblem(new Dictionary<string, string[]> { ["lines"] = ["One or more selected variants are unavailable."] });
 
             var order = new Order { CustomerId = request.CustomerId, OrderType = request.OrderType, CustomerName = request.CustomerName?.Trim(), CustomerPhone = request.CustomerPhone?.Trim(), Notes = request.Notes?.Trim(), DeliveryAddress = request.DeliveryAddress?.Trim() };
+            if (request.EstimatedMinutes is int estimate) order.EstimatedAtUtc = DateTimeOffset.UtcNow.AddMinutes(estimate);
             foreach (var requestLine in request.Lines)
             {
                 var variant = variants[requestLine.VariantId];
@@ -498,7 +504,8 @@ public static class CommerceEndpoints
             if (order is null) return Results.NotFound();
             try
             {
-                await printer.PrintAsync(order, type == "kitchen", ct);
+                var printerHost = await db.DeliverySettings.AsNoTracking().Where(x => x.Id == 1).Select(x => x.PrinterIpAddress).SingleOrDefaultAsync(ct);
+                await printer.PrintAsync(order, type == "kitchen", ct, printerHost);
                 return Results.Ok(new { message = "Sent to printer. Check the printer for the receipt." });
             }
             catch (Exception ex) when (ex is System.Net.Sockets.SocketException or IOException or OperationCanceledException)
@@ -512,12 +519,12 @@ public static class CommerceEndpoints
         {
             var receipt = await db.Orders.AsNoTracking().Where(o => o.OrderNumber == orderNumber)
                 .Select(o => new ReceiptResponse(o.OrderNumber, o.OrderType, o.Status, o.CreatedAtUtc,
-                    o.CustomerName, o.CustomerPhone, o.DeliveryAddress, o.Notes, o.Subtotal,
+                    o.CustomerName, o.CustomerPhone, o.DeliveryAddress, o.Notes, o.EstimatedAtUtc, o.Subtotal,
                     o.DiscountTotal, o.DeliveryFee, o.CustomFeeDescription, o.CustomFee, o.Total,
                     o.Payments.OrderByDescending(p => p.CreatedAtUtc)
                         .Select(p => new ReceiptPaymentResponse(p.Method, p.Status)).FirstOrDefault(),
                     o.Lines.OrderBy(l => l.CreatedAtUtc).ThenBy(l => l.Id)
-                        .Select(l => new ReceiptLineResponse(l.ProductName, l.VariantName, l.Quantity,
+                        .Select(l => new ReceiptLineResponse(l.ProductName, db.Products.Where(p => p.Id == l.ProductId).Select(p => p.ChineseName).FirstOrDefault(), l.VariantName, l.Quantity,
                             l.UnitPrice, l.LineTotal, l.Notes, l.Modifiers.OrderBy(m => m.CreatedAtUtc)
                                 .Select(m => new ReceiptModifierResponse(m.ModifierName, m.PriceAdjustment)).ToList()))
                         .ToList()))
@@ -575,7 +582,7 @@ public sealed record UpdateProductRequest(Guid CategoryId, string Name, string? 
 public sealed record UpdateVariantRequest(string Name, decimal Price, bool IsAvailable);
 public sealed record UpdateModifierGroupRequest(string Name, int MinimumSelections, int MaximumSelections);
 public sealed record UpdateModifierRequest(string Name, decimal PriceAdjustment, bool IsAvailable);
-public sealed record CreateOrderRequest(Guid? CustomerId, OrderType OrderType, PaymentMethod PaymentMethod, string? CustomerName, string? CustomerPhone, string? Notes, string? DeliveryAddress, decimal DeliveryFee, string? CustomFeeDescription, decimal CustomFee, string? Source, List<CreateOrderLineRequest> Lines);
+public sealed record CreateOrderRequest(Guid? CustomerId, OrderType OrderType, PaymentMethod PaymentMethod, string? CustomerName, string? CustomerPhone, string? Notes, string? DeliveryAddress, decimal DeliveryFee, string? CustomFeeDescription, decimal CustomFee, string? Source, List<CreateOrderLineRequest> Lines, int? EstimatedMinutes = null);
 public sealed record CreateOrderLineRequest(Guid VariantId, int Quantity, List<Guid> ModifierIds);
 public sealed record MenuCategoryResponse(Guid Id, string Name, string Slug, List<MenuProductResponse> Products);
 public sealed record MenuProductResponse(Guid Id, string Name, string Slug, string? Description, bool IsVegan, string? VeganSection, string? ChineseName, string? ImageUrl, List<MenuVariantResponse> Variants, List<MenuModifierGroupResponse> ModifierGroups);
@@ -589,11 +596,11 @@ public sealed record AdminVariantResponse(Guid Id, string Name, string Sku, deci
 public sealed record CreateOrderResponse(long OrderNumber, OrderStatus Status, decimal Total);
 public sealed record ReceiptResponse(long OrderNumber, OrderType OrderType, OrderStatus Status,
     DateTimeOffset CreatedAtUtc, string? CustomerName, string? CustomerPhone, string? DeliveryAddress,
-    string? Notes, decimal Subtotal, decimal DiscountTotal, decimal DeliveryFee,
+    string? Notes, DateTimeOffset? EstimatedAtUtc, decimal Subtotal, decimal DiscountTotal, decimal DeliveryFee,
     string? CustomFeeDescription, decimal CustomFee, decimal Total,
     ReceiptPaymentResponse? Payment, List<ReceiptLineResponse> Lines);
 public sealed record ReceiptPaymentResponse(PaymentMethod Method, PaymentStatus Status);
-public sealed record ReceiptLineResponse(string ProductName, string VariantName, int Quantity,
+public sealed record ReceiptLineResponse(string ProductName, string? ChineseName, string VariantName, int Quantity,
     decimal UnitPrice, decimal LineTotal, string? Notes, List<ReceiptModifierResponse> Modifiers);
 public sealed record ReceiptModifierResponse(string ModifierName, decimal PriceAdjustment);
 public sealed record PostcodeAddressResponse(string Address, string Postcode, string? Uprn, double? DistanceMiles);

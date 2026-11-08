@@ -2,7 +2,7 @@
 
 ## Receipt printing
 
-Open a customer receipt from the order queue or history, then choose **Print** to send two copies. The browser sends the receipt to the Epson using ePOS-Print over HTTPS. The iPad must reach the printer and trust its HTTPS certificate; browser permissions and printer configuration must be verified on the iPad. The printer is configured at `192.168.1.234:9100` in `ReceiptPrinter`; override it with `ReceiptPrinter__Host` and `ReceiptPrinter__Port` if needed. The machine running the POS service must be able to reach the printer on the local network; a remotely hosted service needs a local print bridge or private network connection. A successful printer response does not necessarily confirm paper was printed. Check the printer before retrying an uncertain result. Receipt text currently uses ASCII, so unsupported characters are replaced with question marks.
+Open a customer receipt from the order queue or history, then choose **Print** to send one copy. Automatic order printing sends two copies. The browser sends the receipt to the Epson using ePOS-Print over HTTPS. The device must reach the printer and trust its HTTPS certificate. On Android Chrome, allow local network access when requested. Use Check printer connection on a receipt to check connectivity before printing; the check does not confirm print status. The printer is configured at `192.168.1.234:9100` in `ReceiptPrinter`; override it with `ReceiptPrinter__Host` and `ReceiptPrinter__Port` if needed. The machine running the POS service must be able to reach the printer on the local network; a remotely hosted service needs a local print bridge or private network connection. A successful printer response does not necessarily confirm paper was printed. Check the printer before retrying an uncertain result. Receipt text currently uses ASCII, so unsupported characters are replaced with question marks.
 
 ## Staff order queue
 
@@ -66,6 +66,14 @@ After signing in, open `http://127.0.0.1:5000/pos.html`. The responsive POS scre
 
 To populate the menu, an Owner or Manager can use `http://127.0.0.1:5000/menu-admin.html`.
 
-### Telephone card payments
+### Stripe telephone card entry (in progress)
 
-Tap **Copy total** before placing the order, paste the amount into the Stripe app, and take payment there. Select **Card** on the POS and use **Mark card paid** in the order queue after confirming the payment.
+Set `Stripe__PublishableKey` in the server environment to the Stripe publishable key to load Stripe-hosted card fields for delivery card orders. The card fields are only an initial integration: no card payment is created or charged by the POS yet. Continue taking telephone payments in the Stripe app. Do not enter real card details into these fields until payment processing is implemented and tested. The secret key must never be placed in browser code or committed to the repository.
+
+## Website card checkout (test mode)
+
+The website card option remains disabled unless all test settings are configured: `WebsiteCheckout__StripeSessionsEnabled=true`, `Stripe__SecretKey` with a Stripe test secret, `WebsiteCheckout__StripeWebhookSecret` with the test webhook signing secret, `WebsiteCheckout__StripeSuccessUrl=https://staging.anise.dotnetcloud.co.uk/order-status.html`, and `WebsiteCheckout__StripeCancelUrl=https://staging.anise.dotnetcloud.co.uk/stripe-cancelled.html`. Configure the Stripe test webhook to send `checkout.session.completed` and `checkout.session.async_payment_succeeded` to `https://www.anise.dotnetcloud.co.uk/api/webhooks/stripe/website`. Secrets belong in the host's secret manager. The webhook records a paid order only after validating its signature, session, currency and amount. The status page waits for that confirmation; it does not infer success from the redirect.
+
+Before enabling, verify test checkout, cancel and retry, decline/refund, webhook delivery, customer status and POS receipt end to end. The integration deliberately rejects live Stripe keys and live webhook events.
+
+Declining a paid website order starts its full Stripe refund automatically. The order remains in the queue and cannot be accepted until Stripe confirms the refund; staff can retry decline if confirmation is delayed. Existing partial or unresolved refunds require checking Stripe before completing the decline.

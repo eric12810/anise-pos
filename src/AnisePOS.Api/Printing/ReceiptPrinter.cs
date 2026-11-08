@@ -9,9 +9,9 @@ public sealed class ReceiptPrinter(IConfiguration configuration)
 {
     private static readonly SemaphoreSlim Gate = new(1, 1);
 
-    public async Task PrintAsync(Order order, bool kitchen, CancellationToken cancellationToken)
+    public async Task PrintAsync(Order order, bool kitchen, CancellationToken cancellationToken, string? printerHost = null)
     {
-        var host = configuration["ReceiptPrinter:Host"] ?? "192.168.1.234";
+        var host = printerHost ?? configuration["ReceiptPrinter:Host"] ?? "192.168.1.234";
         var port = configuration.GetValue("ReceiptPrinter:Port", 9100);
         var data = Format(order, kitchen);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -31,11 +31,11 @@ public sealed class ReceiptPrinter(IConfiguration configuration)
         var text = new StringBuilder();
         void Line(string? value = "") { if (value != null) text.AppendLine(value); }
         string Money(decimal value) => "GBP " + value.ToString("0.00", CultureInfo.InvariantCulture);
-        Line("             ANISE");
+        Line("ANISE".PadLeft(26));
         Line((kitchen ? "KITCHEN TICKET #" : "CUSTOMER RECEIPT #") + order.OrderNumber);
         Line(order.OrderType + "  " + TimeZoneInfo.ConvertTime(order.CreatedAtUtc, TimeZoneInfo.FindSystemTimeZoneById("Europe/London")).ToString("dd/MM/yyyy HH:mm", CultureInfo.InvariantCulture));
         Line("Status: " + order.Status);
-        Line(new string('-', 42));
+        Line(new string('-', 48));
         if (!string.IsNullOrWhiteSpace(order.CustomerName)) Line(order.CustomerName);
         if (!string.IsNullOrWhiteSpace(order.CustomerPhone)) Line(order.CustomerPhone);
         if (order.OrderType == OrderType.Delivery && !string.IsNullOrWhiteSpace(order.DeliveryAddress)) Line(order.DeliveryAddress);
@@ -49,7 +49,7 @@ public sealed class ReceiptPrinter(IConfiguration configuration)
         if (!string.IsNullOrWhiteSpace(order.Notes)) { Line(); Line("NOTE: " + order.Notes); }
         if (!kitchen)
         {
-            Line(new string('-', 42));
+            Line(new string('-', 48));
             Line("Subtotal: " + Money(order.Subtotal));
             if (order.DeliveryFee != 0) Line("Delivery: " + Money(order.DeliveryFee));
             if (order.CustomFee != 0) Line((order.CustomFeeDescription ?? "Additional charge") + ": " + Money(order.CustomFee));

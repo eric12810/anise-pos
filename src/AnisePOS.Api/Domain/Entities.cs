@@ -96,7 +96,7 @@ public sealed class CustomerAddress : Entity
 public enum OrderType { Collection, Delivery }
 public enum OrderStatus { Draft, Placed, Accepted, Preparing, Ready, Completed, Cancelled, Refunded }
 public enum PaymentMethod { Cash, Card, Online, GiftCard, Other }
-public enum PaymentStatus { Pending, Authorised, Paid, Failed, Voided, Refunded, PartiallyRefunded }
+public enum PaymentStatus { Pending, Authorised, Paid, Failed, Voided, Refunded, PartiallyRefunded, RefundPending }
 public enum StaffRole { Owner, Manager, Cashier }
 
 public sealed class StaffUser : Entity
@@ -140,6 +140,22 @@ public sealed class WebsiteConfirmation : Entity
     public string Kind { get; set; } = "Received";
     public string State { get; set; } = "Pending";
     public DateTimeOffset? SentAtUtc { get; set; }
+}
+
+public sealed class StaffPushSubscription : Entity
+{
+    public string EndpointHash { get; set; } = "";
+    public string ProtectedSubscription { get; set; } = "";
+    public string StaffId { get; set; } = "";
+}
+
+public sealed class StaffPushDelivery : Entity
+{
+    public Guid SubscriptionId { get; set; }
+    public Guid OrderId { get; set; }
+    public string State { get; set; } = "Pending";
+    public int Attempts { get; set; }
+    public DateTimeOffset? NextAttemptAtUtc { get; set; }
 }
 
 public sealed class OrderLine : Entity
@@ -205,4 +221,32 @@ public sealed class WebsiteCheckout : Entity
     public string? StripeSessionId { get; set; }
     public string? StripeSessionUrl { get; set; }
     public Guid? CompletedOrderId { get; set; }
+}
+
+public sealed class DeliverySettings
+{
+    public int Id { get; set; }
+    public string Mode { get; set; } = "radius";
+    public string SectorsJson { get; set; } = "[]";
+    public string RadiusBandsJson { get; set; } = "[]";
+    public string? OrderingAvailabilityJson { get; set; }
+    public string? PromoCodesJson { get; set; }
+    public string? PrinterIpAddress { get; set; }
+    public string? OrderSound { get; set; }
+    public decimal RadiusMiles { get; set; }
+    public decimal Fee { get; set; }
+}
+
+public sealed class PromoRedemption : Entity
+{
+    public string Code { get; set; } = "";
+    public string Phone { get; set; } = "";
+    public Guid OrderId { get; set; }
+}
+
+public sealed class Promotion : Entity
+{
+    public string SettingsJson { get; set; } = "{}";
+    public byte[]? ImageData { get; set; }
+    public string? ImageContentType { get; set; }
 }
