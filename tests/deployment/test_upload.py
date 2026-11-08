@@ -72,3 +72,28 @@ class UploadTests(unittest.TestCase):
         manifest.write_text('abc  ../secret\n')
         with self.assertRaises(ValueError):
             upload.package_files(Path(self.temp.name), manifest)
+
+
+class DirectoryTests(unittest.TestCase):
+    def test_unsupported_mlsd_falls_back(self):
+        from unittest.mock import Mock
+        ftp = Mock()
+        ftp.mlsd.side_effect = upload.ftplib.error_perm('500 unsupported')
+        ftp.nlst.return_value = ['/web.config', 'appsettings.json']
+        self.assertEqual(upload.directory_names(ftp), ['web.config', 'appsettings.json'])
+
+    def test_permission_error_does_not_fall_back(self):
+        from unittest.mock import Mock
+        ftp = Mock()
+        ftp.mlsd.side_effect = upload.ftplib.error_perm('550 denied')
+        with self.assertRaises(upload.ftplib.error_perm):
+            upload.directory_names(ftp)
+        ftp.nlst.assert_not_called()
+
+    def test_failed_fallback_is_not_empty_directory(self):
+        from unittest.mock import Mock
+        ftp = Mock()
+        ftp.mlsd.side_effect = upload.ftplib.error_perm('500 unsupported')
+        ftp.nlst.side_effect = upload.ftplib.error_perm('550 denied')
+        with self.assertRaises(upload.ftplib.error_perm):
+            upload.directory_names(ftp)

@@ -33,9 +33,20 @@ def package_files(root, manifest):
     return files
 
 
+def directory_names(ftp):
+    try:
+        return [name for name, _ in ftp.mlsd()]
+    except ftplib.error_perm as error:
+        if str(error)[:3] not in {'500', '502', '504'}:
+            raise
+        # Older IIS FTP servers may not implement MLSD. NLST lists names only.
+        # Never treat permission errors or failed listings as an empty directory.
+        print('MLSD unsupported; using NLST directory listing.', flush=True)
+        return [PurePosixPath(name).name for name in ftp.nlst()]
+
+
 def upload(ftp, files):
-    # Require MLSD rather than guessing whether files exist after a permissions error.
-    names = {name.lower() for name, _ in ftp.mlsd()}
+    names = {name.lower() for name in directory_names(ftp)}
     if 'app_offline.htm' in names:
         raise RuntimeError('Site already offline; inspect it before retrying.')
     preserve_config = 'web.config' in names
@@ -48,7 +59,7 @@ def upload(ftp, files):
             continue
         ftp.cwd('/')
         for part in PurePosixPath(name).parent.parts:
-            children = {n: facts for n, facts in ftp.mlsd()}
+            children = directory_names(ftp)
             if part not in children:
                 ftp.mkd(part)
             ftp.cwd(part)
@@ -88,8 +99,8 @@ def main():
         ftp.prot_p()
         print('Step: select staging root', flush=True)
         ftp.cwd('/')
-        print('Step: list staging root with MLSD', flush=True)
-        list(ftp.mlsd())
+        print('Step: list staging root', flush=True)
+        directory_names(ftp)
         print('Verified TLS connection and encrypted directory listing at staging account root.')
         if args.deploy:
             upload(ftp, files)
