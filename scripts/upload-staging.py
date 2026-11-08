@@ -78,11 +78,17 @@ def main():
         raise ValueError('Staging password secret is missing')
     files = package_files(Path('artifacts/staging'), Path('artifacts/staging-manifest.sha256'))
     with ftplib.FTP_TLS(context=ssl.create_default_context(), timeout=60) as ftp:
+        print('Step: connect to staging FTPS', flush=True)
         ftp.connect(HOST, 21)
+        print('Step: negotiate and verify TLS', flush=True)
         ftp.auth()
+        print('Step: authenticate staging account', flush=True)
         ftp.login(USER, password)
+        print('Step: encrypt data channel', flush=True)
         ftp.prot_p()
+        print('Step: select staging root', flush=True)
         ftp.cwd('/')
+        print('Step: list staging root with MLSD', flush=True)
         list(ftp.mlsd())
         print('Verified TLS connection and encrypted directory listing at staging account root.')
         if args.deploy:
@@ -95,6 +101,10 @@ if __name__ == '__main__':
     try:
         main()
     except Exception as error:
+        # Log only the protocol status code, never raw server replies or credentials.
+        code = str(error)[:3]
+        if isinstance(error, ftplib.Error) and code.isdigit():
+            print('FTP response code: ' + code)
         # Server replies can include private information; avoid dumping them to logs.
         print('Staging operation failed (' + type(error).__name__ + '). No automatic retry. If upload began, inspect app_offline.htm before restarting the site.')
         raise SystemExit(1)
