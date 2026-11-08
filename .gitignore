@@ -43,3 +43,7 @@ TestResults/
 *.db-wal
 *.log
 artifacts/
+
+# Python tooling
+__pycache__/
+*.pyc

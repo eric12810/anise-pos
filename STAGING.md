@@ -5,37 +5,51 @@ order-transition checks, publishes an IIS package and lists file hashes in the
 Actions log. It has no upload step, FTPS credentials or database connection.
 It does not start the API. Package output is ignored by Git.
 
-## Private repository
+## Repository and confirmed destination
 
-Create a separate private POS repository (proposed name: `eric12810/anise-pos`).
-In VS Code, use Source Control to commit the reviewed files and Publish to GitHub,
-choosing a private repository. Keep local `appsettings*.json` files ignored.
-Use `main` as the initial branch, then create and publish `staging`.
-Pushing `staging` runs the dry run; it can also be run manually from Actions once
-the workflow is on the default branch.
+Private repository: `eric12810/anise-pos`. Both `main` and `staging` are published.
+Work on `staging`; pushing runs the offline package review, never an upload.
 
-## Before enabling uploads
+Confirmed by the user:
+- Site: `https://pos-staging.loveanise.co.uk`.
+- SolidCP Home Folder: `\pos-staging.loveanise.co.uk\wwwroot`.
+- FTPS host: `wsuk32.pronameserver.com`, port 21, explicit TLS.
+- Account: `stageposftp`, login root `/`, mapped to the staging site root.
+- `anisedb` backed up; staging configured for `anisedb`, not `anisedatabase`.
+- The three `STAGING_FTPS_*` repository secrets have been saved in GitHub.
 
-- Intended site: `https://pos-staging.loveanise.co.uk`.
-- Staging account: `stageposftp`. Its observed login path is `/`; this is a
-  candidate destination, pending confirmation against SolidCP's Home Folder.
-  Do not append `wwwroot` without confirming the actual mapping.
-- Confirm FTPS hostname, port, TLS mode, valid TLS certificate and account
-  restriction to the staging POS folder.
-- Back up `anisedb` and verify the staging connection points to it, never the
-  live `anisedatabase`. Starting this API executes schema-changing SQL.
-- Confirm the host supports this project's .NET 9 runtime and IIS hosting module.
-- Configure staging-only settings on the host, including the database connection,
-  test payment credentials and suitable email settings. Keep these out of Git.
-- Confirm the application can persist data-protection keys in its configured
-  sibling `data` directory and keep that directory outside deployment sync.
-- Review the manifest and generated `web.config` before the first upload.
+## Manual connection check and upload
 
-When these are verified, store only staging FTPS credentials as GitHub Actions
-secrets (for example `STAGING_FTPS_HOST`, `STAGING_FTPS_USERNAME` and
-`STAGING_FTPS_PASSWORD`). A future upload workflow must require explicit approval,
-preserve server settings and runtime data, and avoid remote deletion. No live
-credentials or production deployment are included in this setup.
+In Actions choose **POS staging FTPS**, **Run workflow**, branch **staging**.
+Leave mode **check** first. This validates the TLS certificate and encrypted
+connection and directory listing without writing any remote files. It does not
+prove the IIS runtime, database, email or payment configuration is correct.
+
+Only after reviewing that result and approving deployment, select **deploy** and
+enter exactly `DEPLOY pos-staging.loveanise.co.uk` in confirmation. The workflow
+rejects any other branch and serializes runs. This manual confirmation is not a
+protected-environment reviewer policy: repository writers can invoke it.
+
+Uploads overwrite package files only. Existing `web.config`, all appsettings,
+unrelated files, and runtime data are preserved. If no web.config exists, the
+published IIS configuration is installed. Confirm that existing web.config runs
+`AnisePOS.Api.dll` with the .NET runtime before deployment. Confirm the host has
+the appropriate ASP.NET Core hosting runtime and the application can write its
+sibling `data` directory. Keep staging payment and email settings isolated.
+
+The uploader creates `app_offline.htm`, waits for IIS to release assemblies,
+then uploads and downloads each package file to verify its SHA-256 hash. After
+success it removes only the maintenance marker it created, allowing IIS to
+restart the application. Starting the API can update the database schema.
+An existing maintenance marker causes an abort before any write.
+
+If interrupted or failed after upload begins, staging stays offline. Do not
+blindly remove the marker: some files may be from different versions. Restore a
+known-good hosting backup or complete a reviewed recovery before restarting.
+There is no automatic rollback or remote cleanup. Confirm a recoverable backup
+of existing staging application files before the first upload, as well as the
+database backup. After deployment, check `/health` and staff login. A successful
+file upload alone does not establish that the application works.
 
 ## Local verification
 

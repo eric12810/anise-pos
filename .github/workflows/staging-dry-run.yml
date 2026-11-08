@@ -27,6 +27,8 @@ jobs:
         run: dotnet build AnisePOS.sln --configuration Release --no-restore
       - name: Check order transitions without starting the API
         run: dotnet run --project tests/AnisePOS.Checks --configuration Release --no-build
+      - name: Check deployment safeguards offline
+        run: python3 -m unittest discover -s tests/deployment -v
       - name: Prepare package without connecting to hosting
         run: dotnet publish src/AnisePOS.Api/AnisePOS.Api.csproj --configuration Release --no-restore --no-self-contained -p:UseAppHost=false --output artifacts/staging
       - name: Review package and create manifest
