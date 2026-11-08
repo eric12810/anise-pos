@@ -101,3 +101,13 @@ class DirectoryTests(unittest.TestCase):
         ftp.nlst.side_effect = upload.ftplib.error_perm('550 denied')
         with self.assertRaises(upload.ftplib.error_perm):
             upload.directory_names(ftp)
+
+
+class ResumeTests(UploadTests):
+    @patch.object(upload.time, 'sleep')
+    def test_resumes_only_known_maintenance_file(self, _):
+        ftp = FakeFTP(['app_offline.htm'])
+        ftp.files['app_offline.htm'] = upload.MAINTENANCE
+        upload.upload(ftp, self.files)
+        self.assertEqual(ftp.files['AnisePOS.Api.dll'], b'package')
+        self.assertEqual(ftp.deleted, ['app_offline.htm'])

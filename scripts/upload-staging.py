@@ -7,11 +7,42 @@ import os
 from pathlib import Path, PurePosixPath
 import ssl
 import time
+import subprocess
+import tempfile
+from urllib.parse import quote
 
 HOST = 'wsuk32.pronameserver.com'
 USER = 'stageposftp'
 REMOTE_ROOT = '/stageposftp/wwwroot'
 CONFIRMATION = 'DEPLOY pos-staging.loveanise.co.uk'
+
+
+MAINTENANCE = b'<html><body>Staging maintenance</body></html>'
+
+
+class StagingFTP(ftplib.FTP_TLS):
+    def storbinary(self, command, stream):
+        # curl closes IIS encrypted upload connections without ftplib's unwrap wait.
+        if not command.startswith('STOR '):
+            raise ValueError('Only file uploads are supported')
+        remote = self.pwd().rstrip('/') + '/' + command[5:]
+        if not remote.startswith(REMOTE_ROOT + '/'):
+            raise ValueError('Upload outside staging wwwroot')
+        credentials = USER + ':' + os.environ['STAGING_FTPS_PASSWORD']
+        escaped = credentials.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r')
+        with tempfile.NamedTemporaryFile() as payload:
+            while chunk := stream.read(65536):
+                payload.write(chunk)
+            payload.flush()
+            result = subprocess.run([
+                'curl', '--silent', '--show-error', '--fail', '--ssl-reqd',
+                '--connect-timeout', '30', '--max-time', '180', '--config', '-',
+                '--upload-file', payload.name,
+                'ftp://' + HOST + ':21/' + quote(remote, safe='/'),
+            ], input='user = "' + escaped + '"\n', text=True, capture_output=True)
+            if result.returncode:
+                raise RuntimeError('curl upload failed with exit code ' + str(result.returncode))
+        return '226 Upload complete'
 
 
 def package_files(root, manifest):
@@ -50,9 +81,13 @@ def upload(ftp, files):
     ftp.cwd(REMOTE_ROOT)
     names = {name.lower() for name in directory_names(ftp)}
     if 'app_offline.htm' in names:
-        raise RuntimeError('Site already offline; inspect it before retrying.')
+        marker = io.BytesIO()
+        ftp.retrbinary('RETR app_offline.htm', marker.write)
+        if marker.getvalue() != MAINTENANCE:
+            raise RuntimeError('Unrecognized maintenance file; inspect before retrying.')
+        print('Resuming staging upload with verified maintenance marker.')
     preserve_config = 'web.config' in names
-    ftp.storbinary('STOR app_offline.htm', io.BytesIO(b'<html><body>Staging maintenance</body></html>'))
+    ftp.storbinary('STOR app_offline.htm', io.BytesIO(MAINTENANCE))
     # IIS needs time to release loaded assemblies. On failure leave the site offline.
     time.sleep(15)
     for name, path, digest in files:
@@ -90,7 +125,7 @@ def main():
     if not password:
         raise ValueError('Staging password secret is missing')
     files = package_files(Path('artifacts/staging'), Path('artifacts/staging-manifest.sha256'))
-    with ftplib.FTP_TLS(context=ssl.create_default_context(), timeout=60) as ftp:
+    with StagingFTP(context=ssl.create_default_context(), timeout=60) as ftp:
         print('Step: connect to staging FTPS', flush=True)
         ftp.connect(HOST, 21)
         print('Step: negotiate and verify TLS', flush=True)
