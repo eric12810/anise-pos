@@ -1,9 +1,12 @@
 import importlib.util
 import ftplib
+from contextlib import contextmanager
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 from unittest import mock
 
@@ -276,6 +279,80 @@ class ProductionDeploymentTests(unittest.TestCase):
                 with module.connect():
                     pass
         ftp.close.assert_called()
+
+    def test_connection_context_yields_ftp_object_and_allows_cwd(self):
+        module = baseline_module()
+        ftp = mock.Mock()
+        with mock.patch.dict(os.environ, {
+            'LIVE_FTPS_HOST': 'host', 'LIVE_FTPS_USERNAME': 'user',
+            'LIVE_FTPS_PASSWORD': 'not-printed', 'PROD_FTPS_ROOT': '/root'}), \
+                mock.patch.object(module.ftplib, 'FTP_TLS', return_value=ftp):
+            with module.connect() as actual:
+                actual.cwd('/root/again')
+        self.assertIs(actual, ftp)
+        ftp.cwd.assert_any_call('/root/again')
+        ftp.quit.assert_called_once()
+
+    def test_inspect_uses_mocked_ftp_context_and_writes_reports(self):
+        module = baseline_module()
+        with self.subTest('inspect'):
+            with self._temporary_directory() as temporary:
+                directory = Path(temporary)
+                package = directory / 'package'
+                output = directory / 'output'
+                package.mkdir()
+                (package / 'release-manifest.sha256').write_text('hash  AnisePOS.Api.dll\n')
+                report = {
+                    'remote_files': {'AnisePOS.Api.dll': 'remote-hash'},
+                    'unhashed_remote_files': ['web.config'],
+                    'managed_remote_hashes': {'AnisePOS.Api.dll': 'remote-hash'},
+                    'missing_from_remote': [],
+                    'unexpected_remote_files': {'web.config': 'production configuration'},
+                }
+                fake = mock.Mock()
+                with mock.patch.object(module, 'connect', self._connection(fake)), \
+                        mock.patch.object(module, 'inventory', return_value=report), \
+                        mock.patch.dict(os.environ, {'PROD_FTPS_ROOT': '/liveposftp/wwwroot'}):
+                    module.inspect(SimpleNamespace(package=str(package), output=str(output)))
+                self.assertTrue((output / 'production-inventory.json').is_file())
+                self.assertTrue((output / 'production-conflicts.json').is_file())
+                self.assertTrue((output / 'proposed-production-baseline.json').is_file())
+
+    def test_bootstrap_mocked_success_and_hash_mismatch(self):
+        module = baseline_module()
+        with self._temporary_directory() as temporary:
+            directory = Path(temporary)
+            inventory = directory / 'production-inventory.json'
+            inventory.write_text('{"application":"pos.loveanise.co.uk","managed_remote_hashes":{"AnisePOS.Api.dll":"remote-hash"}}\n')
+            fake = mock.Mock()
+            fake.mlsd.return_value = []
+            env = {
+                'LIVE_FTPS_HOST': 'host', 'LIVE_FTPS_USERNAME': 'user', 'LIVE_FTPS_PASSWORD': 'not-printed',
+                'PROD_FTPS_ROOT': '/root', 'PROD_BASELINE_BACKUP_VERIFIED': 'true',
+                'PROD_BASELINE_APP_BACKUP_REFERENCE': 'app-ref', 'PROD_BASELINE_SQL_BACKUP_REFERENCE': 'sql-ref',
+                'PROD_BASELINE_OWNER_CONFIRMATION': 'ESTABLISH PRODUCTION BASELINE',
+            }
+            with mock.patch.dict(os.environ, env), mock.patch.object(module, 'connect', self._connection(fake)), \
+                    mock.patch.object(module, 'remote_files', return_value=({'AnisePOS.Api.dll': 'remote-hash'}, ['web.config'])):
+                module.bootstrap(SimpleNamespace(inventory=str(inventory)))
+            fake.rename.assert_called_once_with(module.PENDING, module.MANIFEST)
+            fake.storbinary.assert_called_once()
+            with mock.patch.dict(os.environ, env), mock.patch.object(module, 'connect', self._connection(fake)), \
+                    mock.patch.object(module, 'remote_files', return_value=({'AnisePOS.Api.dll': 'changed-hash'}, ['web.config'])):
+                with self.assertRaisesRegex(SystemExit, 'remote hashes changed'):
+                    module.bootstrap(SimpleNamespace(inventory=str(inventory)))
+            self.assertEqual(fake.storbinary.call_count, 1)
+
+    @staticmethod
+    def _connection(ftp):
+        @contextmanager
+        def context():
+            yield ftp
+        return context
+
+    @staticmethod
+    def _temporary_directory():
+        return tempfile.TemporaryDirectory()
 
 
 if __name__ == '__main__':
