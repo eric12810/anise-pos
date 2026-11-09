@@ -10,7 +10,24 @@ from unittest import mock
 ROOT = Path(__file__).parents[2]
 SCRIPT = ROOT / 'scripts/production-deploy.py'
 UPLOADER = ROOT / 'scripts/upload-staging.py'
+DIAGNOSTIC = ROOT / 'scripts/production-ftps-diagnostic.py'
 WORKFLOW = ROOT / '.github/workflows/production-release.yml'
+
+
+def production_uploader_module():
+    spec = importlib.util.spec_from_file_location('production_uploader', UPLOADER)
+    module = importlib.util.module_from_spec(spec)
+    with mock.patch.dict(os.environ, {'DEPLOYMENT_ENV': 'production'}, clear=False):
+        spec.loader.exec_module(module)
+    return module
+
+
+class ManifestFTP:
+    def __init__(self, payload=b''):
+        self.payload = payload
+
+    def retrbinary(self, command, callback):
+        callback(self.payload)
 
 
 class ProductionDeploymentTests(unittest.TestCase):
@@ -113,6 +130,9 @@ class ProductionDeploymentTests(unittest.TestCase):
         self.assertNotIn("vars.PROD_FTPS_HOST ||", workflow)
         self.assertNotIn("vars.PROD_FTPS_ROOT ||", workflow)
         self.assertEqual(workflow.split('inputs:', 1)[1].count('staging_run_id:'), 1)
+        diagnostic = (ROOT / '.github/workflows/production-ftps-diagnostic.yml').read_text()
+        self.assertIn('production-ftps-diagnostic.py', diagnostic)
+        self.assertIn('PROD_FTPS_ROOT: ${{ vars.PROD_FTPS_ROOT }}', diagnostic)
 
     def test_production_uploader_has_no_staging_fallback(self):
         uploader = UPLOADER.read_text()
@@ -121,6 +141,33 @@ class ProductionDeploymentTests(unittest.TestCase):
         self.assertNotIn('stageposftp', production_block)
         self.assertNotIn('/stageposftp/wwwroot', production_block)
         self.assertIn("DEPLOYED_MANIFEST = '.anise-pos-production-deployment.json'", production_block)
+
+    def test_production_missing_manifest_fails_closed(self):
+        module = production_uploader_module()
+        with self.assertRaisesRegex(RuntimeError, 'No verified production deployment baseline manifest'):
+            module.read_deployed_manifest(ManifestFTP(), set())
+
+    def test_production_malformed_manifest_fails_closed(self):
+        module = production_uploader_module()
+        with self.assertRaisesRegex(RuntimeError, 'Invalid remote deployment manifest'):
+            module.read_deployed_manifest(ManifestFTP(b'{"version": 1}'), {module.DEPLOYED_MANIFEST})
+
+    def test_production_interrupted_deployment_fails_before_upload(self):
+        module = production_uploader_module()
+        ftp = mock.Mock()
+        ftp.mlsd.return_value = [('app_offline.htm', {})]
+        with self.assertRaisesRegex(RuntimeError, 'Maintenance marker already present'):
+            module.upload(ftp, [])
+        ftp.storbinary.assert_not_called()
+
+    def test_diagnostic_missing_configuration_is_secret_safe(self):
+        env = {key: '' for key in ('LIVE_FTPS_HOST', 'LIVE_FTPS_USERNAME', 'LIVE_FTPS_PASSWORD', 'PROD_FTPS_ROOT')}
+        result = subprocess.run([sys.executable, str(DIAGNOSTIC)], cwd=ROOT,
+                                env={**os.environ, **env}, capture_output=True, text=True, check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('LIVE_FTPS_HOST', result.stdout)
+        self.assertIn('LIVE_FTPS_PASSWORD', result.stdout)
+        self.assertNotIn('not-printed', result.stdout)
 
 
 if __name__ == '__main__':

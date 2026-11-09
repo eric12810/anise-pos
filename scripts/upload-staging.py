@@ -278,5 +278,18 @@ if __name__ == '__main__':
         if isinstance(error, ftplib.Error) and code.isdigit():
             print('FTP response code: ' + code)
         # Server replies can include private information; avoid dumping them to logs.
-        print(('Production' if DEPLOYMENT_ENV == 'production' else 'Staging') + ' operation failed (' + type(error).__name__ + '). No automatic retry. If upload began, inspect app_offline.htm before restarting the site.')
+        detail = str(error)
+        # Keep diagnostics useful while never echoing credentials or endpoint settings.
+        for sensitive in {
+            os.environ.get('DEPLOY_FTPS_PASSWORD', ''),
+            os.environ.get('STAGING_FTPS_PASSWORD', ''),
+            HOST,
+            USER,
+            REMOTE_ROOT,
+        }:
+            if sensitive:
+                detail = detail.replace(sensitive, '[redacted]')
+        print(('Production' if DEPLOYMENT_ENV == 'production' else 'Staging') +
+              ' operation failed (' + type(error).__name__ + '): ' + detail +
+              '. No automatic retry; no files were intentionally changed after the last reported upload.')
         raise SystemExit(1)
