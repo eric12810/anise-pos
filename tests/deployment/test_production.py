@@ -190,6 +190,7 @@ class ProductionDeploymentTests(unittest.TestCase):
 
     def test_baseline_procedure_rechecks_hashes_and_handles_races(self):
         baseline = BASELINE.read_text()
+        self.assertIn('expected POS application identity files', baseline)
         self.assertIn('remote hashes changed since inspection', baseline)
         self.assertIn("if MANIFEST in names or PENDING in names", baseline)
         self.assertIn("ftp.rename(PENDING, MANIFEST)", baseline)

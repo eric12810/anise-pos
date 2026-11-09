@@ -82,6 +82,8 @@ def classify(name, package):
 
 def inventory(ftp, root, package):
     remote = remote_files(ftp, root)
+    if 'AnisePOS.Api.dll' not in remote or 'web.config' not in remote:
+        raise RuntimeError('Remote root does not contain the expected POS application identity files')
     managed = {name: remote[name] for name in package if name in remote}
     missing = sorted(name for name in package if name not in remote)
     unexpected = {name: classify(name, package) for name in remote if name not in package}
