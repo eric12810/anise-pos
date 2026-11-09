@@ -1,0 +1,27 @@
+name: POS production FTPS diagnostic
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: anise-pos-production-ftps-diagnostic
+  cancel-in-progress: false
+
+jobs:
+  diagnostic:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect production FTPS and baseline read-only
+        env:
+          LIVE_FTPS_HOST: ${{ secrets.LIVE_FTPS_HOST }}
+          LIVE_FTPS_USERNAME: ${{ secrets.LIVE_FTPS_USERNAME }}
+          LIVE_FTPS_PASSWORD: ${{ secrets.LIVE_FTPS_PASSWORD }}
+          PROD_FTPS_ROOT: ${{ vars.PROD_FTPS_ROOT }}
+        run: python3 scripts/production-ftps-diagnostic.py
