@@ -11,6 +11,7 @@ ROOT = Path(__file__).parents[2]
 SCRIPT = ROOT / 'scripts/production-deploy.py'
 UPLOADER = ROOT / 'scripts/upload-staging.py'
 DIAGNOSTIC = ROOT / 'scripts/production-ftps-diagnostic.py'
+BASELINE = ROOT / 'scripts/production-baseline.py'
 WORKFLOW = ROOT / '.github/workflows/production-release.yml'
 
 
@@ -168,6 +169,32 @@ class ProductionDeploymentTests(unittest.TestCase):
         self.assertIn('LIVE_FTPS_HOST', result.stdout)
         self.assertIn('LIVE_FTPS_PASSWORD', result.stdout)
         self.assertNotIn('not-printed', result.stdout)
+
+    def test_baseline_bootstrap_requires_verified_backups_before_connecting(self):
+        inventory = ROOT / 'tests/deployment/temporary-baseline-inventory.json'
+        inventory.write_text('{"application":"pos.loveanise.co.uk","managed_remote_hashes":{"x":"y"}}\n')
+        try:
+            result = subprocess.run(
+                [sys.executable, str(BASELINE), 'bootstrap', '--inventory', str(inventory)],
+                cwd=ROOT,
+                env={**os.environ, 'LIVE_FTPS_HOST': 'host', 'LIVE_FTPS_USERNAME': 'user',
+                     'LIVE_FTPS_PASSWORD': 'not-printed', 'PROD_FTPS_ROOT': '/liveposftp/wwwroot',
+                     'PROD_BASELINE_BACKUP_VERIFIED': 'false'},
+                capture_output=True, text=True, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('backup confirmation', result.stderr.lower())
+            self.assertNotIn('not-printed', result.stderr)
+        finally:
+            inventory.unlink(missing_ok=True)
+
+    def test_baseline_procedure_rechecks_hashes_and_handles_races(self):
+        baseline = BASELINE.read_text()
+        self.assertIn('remote hashes changed since inspection', baseline)
+        self.assertIn("if MANIFEST in names or PENDING in names", baseline)
+        self.assertIn("ftp.rename(PENDING, MANIFEST)", baseline)
+        self.assertIn("names_after", baseline)
+        self.assertIn('hashlib.sha256()', baseline)
 
 
 if __name__ == '__main__':
