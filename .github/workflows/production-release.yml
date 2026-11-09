@@ -1,0 +1,36 @@
+name: POS production release
+on:
+  workflow_dispatch:
+    inputs:
+      staging_run_id: {description: 'Exact successful staging dry-run ID', required: true, type: string}
+      artifact_name: {description: 'Exact artifact name from that run', required: true, type: string}
+      mode: {description: Check only or deploy, required: true, type: choice, options: [check, deploy], default: check}
+      host: {description: 'Approved production FTPS hostname', required: true, type: string}
+      remote_root: {description: 'Approved exact production FTPS root', required: true, type: string}
+      db_server: {description: 'Approved production SQL server identifier', required: true, type: string}
+      db_name: {description: 'Approved production database identifier', required: true, type: string}
+      backup_confirmation: {description: 'For deploy type BACKUP CONFIRMED', required: false, type: string}
+      db_confirmation: {description: 'For deploy type DATABASE IDENTITY CONFIRMED', required: false, type: string}
+      confirmation: {description: 'For deploy type DEPLOY production pos', required: false, type: string}
+permissions: {contents: read, actions: read}
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.mode == 'deploy' && 'production' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: {github-token: '${{ secrets.GITHUB_TOKEN }}', run-id: '${{ inputs.staging_run_id }}', name: '${{ inputs.artifact_name }}', path: artifacts/staging}
+      - run: python3 scripts/production-preflight.py
+      - run: cp artifacts/staging/release-manifest.sha256 artifacts/staging-manifest.sha256
+      - name: Validate target and confirmations without connecting to SQL
+        env: {PROD_FTPS_EXPECTED_HOST: '${{ vars.PROD_FTPS_HOST || ''pos.loveanise.co.uk'' }}', PROD_FTPS_EXPECTED_ROOT: '${{ vars.PROD_FTPS_ROOT || ''/liveposftp/wwwroot'' }}', PROD_FTPS_SECRET_HOST: '${{ secrets.LIVE_FTPS_HOST }}', PROD_FTPS_USERNAME: '${{ secrets.LIVE_FTPS_USERNAME }}', PROD_FTPS_PASSWORD: '${{ secrets.LIVE_FTPS_PASSWORD }}', PROD_DB_SERVER: '${{ vars.PROD_DB_SERVER }}', PROD_DB_NAME: '${{ vars.PROD_DB_NAME }}', STAGING_FTPS_HOST: '${{ vars.STAGING_FTPS_HOST }}'}
+        run: python3 scripts/production-deploy.py --mode '${{ inputs.mode }}' --host '${{ inputs.host }}' --root '${{ inputs.remote_root }}' --db-server '${{ inputs.db_server }}' --db-name '${{ inputs.db_name }}' --backup-confirmation '${{ inputs.backup_confirmation }}' --db-confirmation '${{ inputs.db_confirmation }}' --confirmation '${{ inputs.confirmation }}'
+      - name: Deploy exact approved package over production FTPS
+        if: inputs.mode == 'deploy'
+        env: {DEPLOY_FTPS_HOST: '${{ inputs.host }}', DEPLOY_FTPS_USERNAME: '${{ secrets.LIVE_FTPS_USERNAME }}', DEPLOY_FTPS_PASSWORD: '${{ secrets.LIVE_FTPS_PASSWORD }}', DEPLOY_FTPS_ROOT: '${{ inputs.remote_root }}', DEPLOY_CONFIRMATION_TEXT: 'DEPLOY production pos', DEPLOY_CONFIRMATION: '${{ inputs.confirmation }}'}
+        run: python3 scripts/upload-staging.py --deploy
+      - name: Verify live POS health after deployment
+        if: inputs.mode == 'deploy'
+        run: curl --fail --silent --show-error --max-time 20 https://pos.loveanise.co.uk/health > /dev/null

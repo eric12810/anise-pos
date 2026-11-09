@@ -13,10 +13,10 @@ import subprocess
 import tempfile
 from urllib.parse import quote
 
-HOST = 'wsuk32.pronameserver.com'
-USER = 'stageposftp'
-REMOTE_ROOT = '/stageposftp/wwwroot'
-CONFIRMATION = 'DEPLOY pos-staging.loveanise.co.uk'
+HOST = os.environ.get('DEPLOY_FTPS_HOST', 'wsuk32.pronameserver.com')
+USER = os.environ.get('DEPLOY_FTPS_USERNAME', 'stageposftp')
+REMOTE_ROOT = os.environ.get('DEPLOY_FTPS_ROOT', '/stageposftp/wwwroot')
+CONFIRMATION = os.environ.get('DEPLOY_CONFIRMATION_TEXT', 'DEPLOY pos-staging.loveanise.co.uk')
 
 
 MAINTENANCE = b'<html><body>Staging maintenance</body></html>'
@@ -36,7 +36,7 @@ class StagingFTP(ftplib.FTP_TLS):
         remote = self.pwd().rstrip('/') + '/' + command[5:]
         if not remote.startswith(REMOTE_ROOT + '/'):
             raise ValueError('Upload outside staging wwwroot')
-        credentials = USER + ':' + os.environ['STAGING_FTPS_PASSWORD']
+        credentials = USER + ':' + (os.environ.get('DEPLOY_FTPS_PASSWORD') or os.environ.get('STAGING_FTPS_PASSWORD', ''))
         escaped = credentials.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r')
         with tempfile.NamedTemporaryFile() as payload:
             while chunk := stream.read(65536):
@@ -196,9 +196,9 @@ def main():
     args = parser.parse_args()
     if args.deploy and os.environ.get('DEPLOY_CONFIRMATION') != CONFIRMATION:
         raise ValueError('Explicit deployment confirmation is required')
-    if os.environ.get('STAGING_FTPS_HOST') != HOST or os.environ.get('STAGING_FTPS_USERNAME') != USER:
+    if (os.environ.get('DEPLOY_FTPS_HOST') or os.environ.get('STAGING_FTPS_HOST')) != HOST or (os.environ.get('DEPLOY_FTPS_USERNAME') or os.environ.get('STAGING_FTPS_USERNAME')) != USER:
         raise ValueError('Credentials must match the approved staging host and account')
-    password = os.environ.get('STAGING_FTPS_PASSWORD')
+    password = os.environ.get('DEPLOY_FTPS_PASSWORD') or os.environ.get('STAGING_FTPS_PASSWORD')
     if not password:
         raise ValueError('Staging password secret is missing')
     files = package_files(Path('artifacts/staging'), Path('artifacts/staging-manifest.sha256'))

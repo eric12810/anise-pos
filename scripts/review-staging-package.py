@@ -26,5 +26,7 @@ for path in sorted(root.rglob('*')):
 
 manifest = Path('artifacts/staging-manifest.sha256')
 manifest.write_text('\n'.join(rows) + '\n')
+# Keep the approved checksum manifest inside the uploaded, immutable artifact.
+(root / 'release-manifest.sha256').write_text(manifest.read_text())
 print(f'OFFLINE DRY RUN: {len(rows)} files. No FTPS connection or database access.')
 print(manifest.read_text())

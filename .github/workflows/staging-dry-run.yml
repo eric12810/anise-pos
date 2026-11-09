@@ -33,3 +33,9 @@ jobs:
         run: dotnet publish src/AnisePOS.Api/AnisePOS.Api.csproj --configuration Release --no-restore --no-self-contained -p:UseAppHost=false --output artifacts/staging
       - name: Review package and create manifest
         run: python3 scripts/review-staging-package.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: anise-pos-staging-${{ github.sha }}
+          path: artifacts/staging
+          if-no-files-found: error
+          retention-days: 90
