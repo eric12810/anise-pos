@@ -8,6 +8,7 @@ def main():
     if not all(expected) or (a.host,a.root,a.db_server,a.db_name) != expected: raise SystemExit('Approved production FTPS/database identity is not configured or does not match')
     if os.environ.get('PROD_FTPS_SECRET_HOST') != a.host or not os.environ.get('PROD_FTPS_USERNAME') or not os.environ.get('PROD_FTPS_PASSWORD'): raise SystemExit('Separate production FTPS credentials or hostname are missing')
     if a.host == os.environ.get('STAGING_FTPS_HOST') or 'staging' in a.root.lower() or a.db_name == 'anisedb': raise SystemExit('Staging target refused for production')
-    if a.mode == 'deploy' and (a.backup_confirmation != 'BACKUP CONFIRMED' or a.db_confirmation != 'DATABASE IDENTITY CONFIRMED' or a.confirmation != 'DEPLOY production pos'): raise SystemExit('Backup, database identity and production confirmations are required')
+    if a.mode == 'deploy' and os.environ.get('PROD_BACKUP_CONFIRMED', '').lower() != 'true':
+        raise SystemExit('Production backup requirement is not verified; set protected production PROD_BACKUP_CONFIRMED=true')
     print('CHECK ONLY: production target and database identity match configured approvals; no SQL or FTPS connection made.')
 if __name__ == '__main__': main()
