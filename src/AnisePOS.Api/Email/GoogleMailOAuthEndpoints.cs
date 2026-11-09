@@ -9,7 +9,7 @@ namespace AnisePOS.Api.Email;
 
 public static class GoogleMailOAuthEndpoints
 {
-    private const string Redirect = "https://www.anise.dotnetcloud.co.uk/api/admin/google-mail/callback";
+    private const string Redirect = "https://pos-staging.loveanise.co.uk/api/admin/google-mail/callback";
     private const string Cookie = "anise.googlemail.state";
     public static void MapGoogleMailOAuthEndpoints(this IEndpointRouteBuilder app)
     {

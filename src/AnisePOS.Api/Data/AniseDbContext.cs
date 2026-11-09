@@ -5,6 +5,9 @@ namespace AnisePOS.Api.Data;
 
 public sealed class AniseDbContext(DbContextOptions<AniseDbContext> options) : DbContext(options)
 {
+    public DbSet<Promotion> Promotions => Set<Promotion>();
+    public DbSet<PromoRedemption> PromoRedemptions => Set<PromoRedemption>();
+    public DbSet<DeliverySettings> DeliverySettings => Set<DeliverySettings>();
     public DbSet<Category> Categories => Set<Category>();
     public DbSet<ProductImage> ProductImages => Set<ProductImage>();
     public DbSet<Product> Products => Set<Product>();
@@ -21,6 +24,8 @@ public sealed class AniseDbContext(DbContextOptions<AniseDbContext> options) : D
     public DbSet<Payment> Payments => Set<Payment>();
     public DbSet<WebsiteCheckout> WebsiteCheckouts => Set<WebsiteCheckout>();
     public DbSet<WebsiteConfirmation> WebsiteConfirmations => Set<WebsiteConfirmation>();
+    public DbSet<StaffPushSubscription> StaffPushSubscriptions => Set<StaffPushSubscription>();
+    public DbSet<StaffPushDelivery> StaffPushDeliveries => Set<StaffPushDelivery>();
     public DbSet<OrderStatusHistory> OrderStatusHistory => Set<OrderStatusHistory>();
 
     protected override void OnModelCreating(ModelBuilder builder)
@@ -32,6 +37,10 @@ public sealed class AniseDbContext(DbContextOptions<AniseDbContext> options) : D
             builder.Entity(type.ClrType).Property(nameof(Entity.UpdatedAtUtc)).HasPrecision(0);
         }
 
+        builder.Entity<PromoRedemption>(e => { e.HasIndex(x => new { x.Code, x.Phone }); e.Property(x => x.Code).HasMaxLength(40); e.Property(x => x.Phone).HasMaxLength(20); });
+        builder.Entity<StaffPushSubscription>(e => { e.HasIndex(x => x.EndpointHash).IsUnique(); e.Property(x => x.EndpointHash).HasMaxLength(64); e.Property(x => x.StaffId).HasMaxLength(100); });
+        builder.Entity<StaffPushDelivery>(e => { e.HasIndex(x => new { x.SubscriptionId, x.OrderId }).IsUnique(); e.Property(x => x.State).HasMaxLength(16); e.Property(x => x.NextAttemptAtUtc).HasPrecision(0); });
+        builder.Entity<DeliverySettings>(e => { e.HasKey(x => x.Id); e.Property(x => x.Id).ValueGeneratedNever(); e.Property(x => x.Mode).HasMaxLength(16); e.Property(x => x.RadiusMiles).HasPrecision(6, 2); e.Property(x => x.Fee).HasPrecision(10, 2); });
         builder.Entity<Category>(e => { e.HasIndex(x => x.Slug).IsUnique(); e.Property(x => x.Name).HasMaxLength(100); e.Property(x => x.Slug).HasMaxLength(120); });
         builder.Entity<ProductImage>(e => { e.HasKey(x => x.ProductId); e.Property(x => x.ContentType).HasMaxLength(20); e.HasOne<Product>().WithOne().HasForeignKey<ProductImage>(x => x.ProductId).OnDelete(DeleteBehavior.Cascade); });
         builder.Entity<Product>(e => { e.HasIndex(x => x.Slug).IsUnique(); e.Property(x => x.Name).HasMaxLength(150); e.Property(x => x.Slug).HasMaxLength(170); e.Property(x => x.Description).HasMaxLength(1000); e.Property(x => x.ChineseName).HasMaxLength(150); });

@@ -11,25 +11,28 @@ public static class WebsiteOrderEndpoints
 {
     public static void MapWebsiteOrderEndpoints(this IEndpointRouteBuilder app)
     {
+        app.MapPost("/api/website/ordering-status", async (AniseDbContext db, CancellationToken ct) => Results.Ok(OrderingAvailability.Evaluate(await OrderingAvailability.Get(db, ct), DateTimeOffset.UtcNow))).RequireCors("PublicWebsiteCheckout").RequireRateLimiting("website-availability");
         // The checkout reference is a random bearer credential; never return customer details here.
         app.MapPost("/api/website/orders/status", async (WebsiteStatusRequest request, AniseDbContext db, HttpResponse response, CancellationToken ct) =>
         {
             response.Headers.CacheControl = "no-store";
             if (request.RequestId == Guid.Empty) return Results.NotFound();
             var reference = request.RequestId.ToString("D");
-            var cutoff = DateTimeOffset.UtcNow.AddDays(-7);
+            var cutoff = DateTimeOffset.UtcNow.AddHours(-24);
             var order = await db.Payments.AsNoTracking()
                 .Where(p => p.Provider == "WebsiteCash" && p.ProviderReference == reference && p.Order.CreatedAtUtc >= cutoff)
-                .Select(p => new { p.Order.OrderNumber, p.Order.Status, p.Order.OrderType, p.Order.EstimatedAtUtc })
+                .Select(p => new { p.Order.OrderNumber, p.Order.Status, p.Order.OrderType, p.Order.EstimatedAtUtc, DeliveryStarted = db.WebsiteConfirmations.Any(x => x.OrderId == p.OrderId && x.Kind == "DeliveryStarted") })
                 .SingleOrDefaultAsync(ct);
             if (order is null)
                 order = await db.WebsiteCheckouts.AsNoTracking().Where(c => c.RequestId == request.RequestId && c.CreatedAtUtc >= cutoff && c.CompletedOrderId != null)
                     .Join(db.Orders.AsNoTracking(), c => c.CompletedOrderId, o => (Guid?)o.Id,
-                        (c, o) => new { o.OrderNumber, o.Status, o.OrderType, o.EstimatedAtUtc }).SingleOrDefaultAsync(ct);
-            return order is null ? Results.NotFound() : Results.Ok(order);
+                        (c, o) => new { o.OrderNumber, o.Status, o.OrderType, o.EstimatedAtUtc, DeliveryStarted = db.WebsiteConfirmations.Any(x => x.OrderId == o.Id && x.Kind == "DeliveryStarted") }).SingleOrDefaultAsync(ct);
+            if (order is not null) return Results.Ok(order);
+            var pending = await db.WebsiteCheckouts.AsNoTracking().AnyAsync(c => c.RequestId == request.RequestId && c.CreatedAtUtc >= cutoff && c.CompletedOrderId == null, ct);
+            return pending ? Results.Accepted() : Results.NotFound();
         }).RequireCors("PublicWebsiteCheckout").RequireRateLimiting("website-status");
 
-        app.MapPost("/api/website/delivery-quote", async (DeliveryQuoteRequest request, IConfiguration config,
+        app.MapPost("/api/website/delivery-quote", async (DeliveryQuoteRequest request, AniseDbContext db, IConfiguration config,
             IHttpClientFactory clients, CancellationToken ct) =>
         {
             if (!config.GetValue("WebsiteCheckout:DeliveryQuoteEnabled", true))
@@ -42,14 +45,10 @@ public static class WebsiteOrderEndpoints
                 client.Timeout = TimeSpan.FromSeconds(8);
                 var location = await client.GetFromJsonAsync<PostcodeLookup>(
                     "https://api.postcodes.io/postcodes/" + Uri.EscapeDataString(request.Postcode!.Trim()), ct);
-                var radius = config.GetValue("WebsiteCheckout:DeliveryRadiusMiles", 2.0);
-                var fee = config.GetValue("WebsiteCheckout:DeliveryFee", 0m);
-                if (!double.IsFinite(radius) || radius < 0 || fee < 0 || fee > 1000)
-                    return Results.Problem("Delivery is temporarily unavailable.", statusCode: 503);
+                var settings = await DeliverySettingsForWebsite.Get(db, config, ct);
                 if (location?.Result is null) return Results.BadRequest(new { message = "We could not find that postcode." });
-                var eligible = WebsiteCheckoutValidation.IsInDeliveryArea(51.5434592, -0.1492259,
-                    location.Result.Latitude, location.Result.Longitude, radius);
-                return Results.Ok(new { eligible, deliveryFee = eligible ? fee : (decimal?)null });
+                var decision = DeliverySettingsForWebsite.Decide(settings, request.Postcode!, location.Result.Latitude, location.Result.Longitude);
+                return Results.Ok(new { eligible = decision is not null, deliveryFee = decision?.Fee, requiresApproval = decision?.RequiresApproval ?? false });
             }
             catch (HttpRequestException e) when (e.StatusCode == System.Net.HttpStatusCode.NotFound)
             { return Results.BadRequest(new { message = "We could not find that postcode." }); }
@@ -57,11 +56,54 @@ public static class WebsiteOrderEndpoints
             { return Results.Problem("Delivery availability is temporarily unavailable. Please try again.", statusCode: 503); }
         }).RequireCors("PublicWebsiteCheckout").RequireRateLimiting("website-checkout");
 
-        // Disabled until payment verification and fulfilment are implemented.
-        app.MapPost("/api/website/stripe-checkout", async (WebsiteCashOrder request, AniseDbContext db,
-            IConfiguration config, IHttpClientFactory clients, CancellationToken ct) =>
+        app.MapPost("/api/website/offer-quote", async (OfferQuoteRequest request, AniseDbContext db, IConfiguration config, CancellationToken ct) =>
         {
-            if (!config.GetValue("WebsiteCheckout:StripeSessionsEnabled", false))
+            if (!string.IsNullOrWhiteSpace(request.Phone) && !WebsiteCheckoutValidation.ValidPhone(request.Phone) || request.OrderType is not (OrderType.Collection or OrderType.Delivery) ||
+                request.Lines is null || request.Lines.Count is < 1 or > 50 || request.DeliveryFee < 0 || request.DeliveryFee > 1000 ||
+                request.OrderType == OrderType.Collection && request.DeliveryFee != 0 ||
+                request.Lines.Any(x => x is null || x.Quantity is < 1 or > 99 || x.ModifierIds is null || x.ModifierIds.Count > 50))
+                return Results.BadRequest(new { message = "Check your phone number and basket." });
+            var ids = request.Lines.Select(x => x.VariantId).Distinct().ToList();
+            var variants = await db.ProductVariants.Include(v => v.Product).ThenInclude(p => p.ModifierGroups)
+                .ThenInclude(l => l.ModifierGroup).ThenInclude(g => g.Modifiers)
+                .Where(v => ids.Contains(v.Id) && v.IsAvailable && v.Product.IsAvailable && v.Product.Categories.Any(c => c.IsAvailable))
+                .ToDictionaryAsync(v => v.Id, ct);
+            if (variants.Count != ids.Count) return Results.BadRequest(new { message = "A selected item is no longer available." });
+            var order = new Order { OrderType = request.OrderType, DeliveryFee = request.DeliveryFee };
+            foreach (var item in request.Lines)
+            {
+                var variant = variants[item.VariantId]; var groups = variant.Product.ModifierGroups.Select(x => x.ModifierGroup).ToList();
+                var selected = item.ModifierIds.Distinct().ToList();
+                if (selected.Count != item.ModifierIds.Count) return Results.BadRequest(new { message = "Duplicate options are not allowed." });
+                var modifiers = groups.SelectMany(g => g.Modifiers).Where(m => selected.Contains(m.Id) && m.IsAvailable).ToList();
+                if (modifiers.Count != selected.Count || groups.Any(g => modifiers.Count(m => m.ModifierGroupId == g.Id) < g.MinimumSelections || modifiers.Count(m => m.ModifierGroupId == g.Id) > g.MaximumSelections))
+                    return Results.BadRequest(new { message = "Check the options selected for your items." });
+                var lineTotal = (variant.Price + modifiers.Sum(m => m.PriceAdjustment)) * item.Quantity;
+                if (lineTotal < 0) return Results.BadRequest(new { message = "An item has an invalid price." });
+                order.Lines.Add(new OrderLine { ProductId = variant.ProductId, Quantity = item.Quantity, LineTotal = lineTotal });
+            }
+            order.Subtotal = order.Lines.Sum(x => x.LineTotal);
+            var offer = await PromotionPricing.Best(db, config, order, request.Phone, request.PromoCode, request.IsReturningCustomer, ct);
+            if (offer.Error is not null) return Results.BadRequest(new { code = "promo_unavailable", message = offer.Error });
+            return Results.Ok(new { order.Subtotal, offer.Discount, offer.Name, total = order.Subtotal + order.DeliveryFee - offer.Discount });
+        }).RequireCors("PublicWebsiteCheckout").RequireRateLimiting("website-offers");
+
+        app.MapPost("/api/website/promo-quote", async (PromoQuoteRequest request, AniseDbContext db, IConfiguration config, CancellationToken ct) =>
+        {
+            var promo = await PromoCodes.Find(db, config, request.Code, ct);
+            return promo is null ? Results.BadRequest(new { message = "This promo code is not valid or has expired." })
+                : Results.Ok(new { promo.Percent, promo.MinimumSubtotal });
+        }).RequireCors("PublicWebsiteCheckout").RequireRateLimiting("website-checkout");
+
+        app.MapPost("/api/website/card-availability", (IConfiguration config) =>
+            Results.Ok(new { available = CardCheckoutConfigured(config) }))
+            .RequireCors("PublicWebsiteCheckout").RequireRateLimiting("website-status");
+
+        // Card checkout remains test-only until explicitly configured and verified.
+        app.MapPost("/api/website/stripe-checkout", async (WebsiteCashOrder request, AniseDbContext db,
+            IConfiguration config, IHttpClientFactory clients, IDataProtectionProvider protection, CancellationToken ct) =>
+        {
+            if (!CardCheckoutConfigured(config))
                 return Results.Problem("Card checkout is not available yet.", statusCode: 503);
             var secret = config["Stripe:SecretKey"];
             var successUrl = config["WebsiteCheckout:StripeSuccessUrl"];
@@ -69,6 +111,8 @@ public static class WebsiteOrderEndpoints
             if (secret is null || !secret.StartsWith("sk_test_", StringComparison.Ordinal) ||
                 !ValidCheckoutReturnUrl(successUrl) || !ValidCheckoutReturnUrl(cancelUrl))
                 return Results.Problem("Stripe test checkout is not configured.", statusCode: 503);
+            if (!string.IsNullOrWhiteSpace(request.Email) && !GmailConfirmationSender.ValidAddress(request.Email.Trim()))
+                return Results.BadRequest(new { message = "Enter a valid email address for your order confirmation." });
             if (request.RequestId == Guid.Empty || request.Lines is null || request.Lines.Count is < 1 or > 50 ||
                 request.Lines.Any(x => x is null || x.Quantity is < 1 or > 99 || x.ModifierIds is null || x.ModifierIds.Count > 50 || (x.Notes?.Length ?? 0) > 500) ||
                 request.OrderType is not (OrderType.Collection or OrderType.Delivery) ||
@@ -82,27 +126,32 @@ public static class WebsiteOrderEndpoints
             if (checkout?.StripeSessionUrl is not null) return Results.Ok(new { url = checkout.StripeSessionUrl });
             if (checkout is null)
             {
+            var availability = OrderingAvailability.Evaluate(await OrderingAvailability.Get(db, ct), DateTimeOffset.UtcNow);
+            if (!availability.Accepting) return Results.Json(new { code = "ordering_closed", message = availability.Reason, availability.NextOpenAt }, statusCode: 403);
             string? address = null;
             decimal fee = 0;
+            bool requiresApproval = false;
             if (request.OrderType == OrderType.Delivery)
             {
                 if (!WebsiteCheckoutValidation.ValidAddressLine(request.AddressLine1, true) ||
                     !WebsiteCheckoutValidation.ValidAddressLine(request.AddressLine2, false) || !WebsiteCheckoutValidation.ValidPostcode(request.Postcode))
                     return Results.BadRequest(new { message = "Enter a delivery address and postcode." });
                 var postcode = request.Postcode!.Trim();
+                var settings = await DeliverySettingsForWebsite.Get(db, config, ct);
+                if (settings.RadiusMiles < 0 || settings.RadiusMiles > 3 || settings.Fee < 0 || settings.Fee > 1000) return Results.Problem("Delivery is temporarily unavailable.", statusCode: 503);
                 try
                 {
                     var client = clients.CreateClient();
                     client.Timeout = TimeSpan.FromSeconds(8);
                     var location = await client.GetFromJsonAsync<PostcodeLookup>("https://api.postcodes.io/postcodes/" + Uri.EscapeDataString(postcode), ct);
-                    var radius = config.GetValue("WebsiteCheckout:DeliveryRadiusMiles", 2.0);
-                    if (location?.Result is null || !WebsiteCheckoutValidation.IsInDeliveryArea(51.5434592, -0.1492259, location.Result.Latitude, location.Result.Longitude, radius))
-                        return Results.BadRequest(new { message = "This postcode is outside our delivery area or could not be found." });
+                    var decision = location?.Result is null ? null : DeliverySettingsForWebsite.Decide(settings, postcode, location.Result.Latitude, location.Result.Longitude);
+                    if (decision is null) return Results.BadRequest(new { message = "This postcode is more than three miles away or could not be found." });
+                    if (decision.RequiresApproval && !request.OutsideRadiusAcknowledged)
+                        return Results.Conflict(new { message = "This address is outside our normal delivery radius. Please check delivery again and acknowledge that we may decline your order." });
+                    fee = decision.Fee; requiresApproval = decision.RequiresApproval;
                 }
                 catch (Exception e) when (e is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException)
                 { return Results.Problem("Delivery availability is temporarily unavailable. Please try again.", statusCode: 503); }
-                fee = config.GetValue("WebsiteCheckout:DeliveryFee", 0m);
-                if (fee < 0 || fee > 1000) return Results.Problem("Delivery is temporarily unavailable.", statusCode: 503);
                 address = string.Join(", ", new[] { request.AddressLine1?.Trim(), request.AddressLine2?.Trim(), postcode }.Where(s => !string.IsNullOrWhiteSpace(s)));
             }
             var ids = request.Lines.Select(x => x.VariantId).Distinct().ToList();
@@ -112,7 +161,7 @@ public static class WebsiteOrderEndpoints
                 .ToDictionaryAsync(v => v.Id, ct);
             if (variants.Count != ids.Count) return Results.BadRequest(new { message = "A selected item is no longer available." });
             var order = new Order { OrderType = request.OrderType, Status = OrderStatus.Placed,
-                CustomerName = request.Name.Trim(), CustomerPhone = request.Phone.Trim(), DeliveryAddress = address, DeliveryFee = fee };
+                CustomerName = request.Name.Trim(), CustomerPhone = request.Phone.Trim(), DeliveryAddress = address, DeliveryFee = fee, Notes = requiresApproval ? "Outside normal delivery radius — staff approval required; customer informed order may be declined." : null };
             foreach (var item in request.Lines)
             {
                 var variant = variants[item.VariantId];
@@ -129,14 +178,33 @@ public static class WebsiteOrderEndpoints
                     Quantity = item.Quantity, LineTotal = lineTotal, Notes = string.IsNullOrWhiteSpace(item.Notes) ? null : item.Notes.Trim(),
                     Modifiers = modifiers.Select(m => new OrderLineModifier { ModifierId = m.Id, ModifierName = m.Name, PriceAdjustment = m.PriceAdjustment }).ToList() });
             }
-            order.Subtotal = order.Lines.Sum(l => l.LineTotal); order.Total = order.Subtotal + fee;
+            order.Subtotal = order.Lines.Sum(l => l.LineTotal);
+            if (order.OrderType == OrderType.Delivery && order.Subtotal < 18m)
+                return Results.BadRequest(new { code = "delivery_minimum", message = "The minimum food subtotal for delivery is £18.00." });
+            var offer = await PromotionPricing.Best(db, config, order, request.Phone, request.PromoCode, request.IsReturningCustomer, ct);
+            if (offer.Error is not null) return Results.BadRequest(new { code = "promo_unavailable", message = offer.Error });
+            order.DiscountTotal = offer.Discount;
+            if (offer.Name is not null) order.Notes = string.Join(" ", new[] { order.Notes, offer.Name }.Where(x => !string.IsNullOrEmpty(x)));
+            order.Total = order.Subtotal + fee - order.DiscountTotal;
             if (request.ExpectedTotal is null || request.ExpectedTotal.Value != order.Total)
                 return Results.Conflict(new { message = "The order total has changed. Please refresh the menu and review your order." });
             if (order.Total < 0.30m || order.Total > 999999.99m)
                 return Results.BadRequest(new { message = "The order total cannot be processed by card." });
+            string? protectedConfirmation = null;
+            if (config.GetValue("GoogleMail:ConfirmationsEnabled", false) && !string.IsNullOrWhiteSpace(request.Email))
+            {
+                var baseUrl = config["GoogleMail:TrackingBaseUrl"];
+                if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var tracking) || tracking.Scheme != "https" ||
+                    tracking.Host is not ("staging.anise.dotnetcloud.co.uk" or "www.loveanise.co.uk" or "loveanise.co.uk") ||
+                    !tracking.IsDefaultPort || !string.IsNullOrEmpty(tracking.UserInfo) || tracking.AbsolutePath != "/order-status.html" ||
+                    !string.IsNullOrEmpty(tracking.Fragment) || !string.IsNullOrEmpty(tracking.Query))
+                    return Results.Problem("Order confirmation is temporarily unavailable.", statusCode: 503);
+                protectedConfirmation = protection.CreateProtector("Anise.WebsiteConfirmation.v1").Protect(
+                    System.Text.Json.JsonSerializer.Serialize(new ConfirmationPayload(request.Email.Trim(), baseUrl + "#" + request.RequestId.ToString("D"))));
+            }
             var snapshot = System.Text.Json.JsonSerializer.Serialize(new {
-                request, order.OrderType, order.CustomerName, order.CustomerPhone, order.DeliveryAddress,
-                order.Subtotal, order.DeliveryFee, order.Total,
+                protectedConfirmation, promoCode = request.PromoCode?.Trim().ToUpperInvariant(), recordPromoRedemption = offer.CodeApplied && offer.RecordCode, order.OrderType, order.CustomerName, order.CustomerPhone, order.DeliveryAddress,
+                order.Subtotal, order.DeliveryFee, order.DiscountTotal, order.Total, order.Notes,
                 lines = order.Lines.Select(l => new { l.ProductId, l.ProductVariantId, l.ProductName, l.VariantName,
                     l.UnitPrice, l.Quantity, l.LineTotal, l.Notes,
                     modifiers = l.Modifiers.Select(m => new { m.ModifierId, m.ModifierName, m.PriceAdjustment }).ToArray() }).ToArray()
@@ -162,7 +230,7 @@ public static class WebsiteOrderEndpoints
                 stripeRequest.Headers.Add("Stripe-Version", "2024-06-20");
                 stripeRequest.Content = new FormUrlEncodedContent(new Dictionary<string, string> {
                     ["mode"] = "payment", ["payment_method_types[0]"] = "card",
-                    ["success_url"] = successUrl!, ["cancel_url"] = cancelUrl!,
+                    ["success_url"] = new Uri(new Uri(successUrl!), "/order-status.html").AbsoluteUri + "#" + request.RequestId.ToString("D"), ["cancel_url"] = cancelUrl! + "#" + request.RequestId.ToString("D"),
                     ["client_reference_id"] = checkout.Id.ToString("D"),
                     ["metadata[website_checkout_id]"] = checkout.Id.ToString("D"),
                     ["line_items[0][price_data][currency]"] = "gbp",
@@ -202,28 +270,33 @@ public static class WebsiteOrderEndpoints
             var existing = await db.Payments.AsNoTracking().Where(p => p.Provider == "WebsiteCash" && p.ProviderReference == reference)
                 .Select(p => new { p.Order.OrderNumber, p.Order.Total }).SingleOrDefaultAsync(ct);
             if (existing is not null) return Results.Ok(existing);
+            var availability = OrderingAvailability.Evaluate(await OrderingAvailability.Get(db, ct), DateTimeOffset.UtcNow);
+            if (!availability.Accepting) return Results.Json(new { code = "ordering_closed", message = availability.Reason, availability.NextOpenAt }, statusCode: 403);
 
             string? address = null;
             decimal fee = 0;
+            bool requiresApproval = false;
             if (request.OrderType == OrderType.Delivery)
             {
                 if (!WebsiteCheckoutValidation.ValidAddressLine(request.AddressLine1, true) ||
                     !WebsiteCheckoutValidation.ValidAddressLine(request.AddressLine2, false) || !WebsiteCheckoutValidation.ValidPostcode(request.Postcode))
                     return Results.BadRequest(new { message = "Enter a delivery address and postcode." });
                 var postcode = request.Postcode!.Trim();
+                var settings = await DeliverySettingsForWebsite.Get(db, config, ct);
+                if (settings.RadiusMiles < 0 || settings.RadiusMiles > 3 || settings.Fee < 0 || settings.Fee > 1000) return Results.Problem("Delivery is temporarily unavailable.", statusCode: 503);
                 try
                 {
                     var client = clients.CreateClient();
                     client.Timeout = TimeSpan.FromSeconds(8);
                     var location = await client.GetFromJsonAsync<PostcodeLookup>("https://api.postcodes.io/postcodes/" + Uri.EscapeDataString(postcode), ct);
-                    var radius = config.GetValue("WebsiteCheckout:DeliveryRadiusMiles", 2.0);
-                    if (location?.Result is null || !WebsiteCheckoutValidation.IsInDeliveryArea(51.5434592, -0.1492259, location.Result.Latitude, location.Result.Longitude, radius))
-                        return Results.BadRequest(new { message = "This postcode is outside our delivery area or could not be found." });
+                    var decision = location?.Result is null ? null : DeliverySettingsForWebsite.Decide(settings, postcode, location.Result.Latitude, location.Result.Longitude);
+                    if (decision is null) return Results.BadRequest(new { message = "This postcode is more than three miles away or could not be found." });
+                    if (decision.RequiresApproval && !request.OutsideRadiusAcknowledged)
+                        return Results.Conflict(new { message = "This address is outside our normal delivery radius. Please check delivery again and acknowledge that we may decline your order." });
+                    fee = decision.Fee; requiresApproval = decision.RequiresApproval;
                 }
                 catch (Exception e) when (e is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException)
                 { return Results.Problem("Delivery availability is temporarily unavailable. Please try again.", statusCode: 503); }
-                fee = config.GetValue("WebsiteCheckout:DeliveryFee", 0m);
-                if (fee < 0 || fee > 1000) return Results.Problem("Delivery is temporarily unavailable.", statusCode: 503);
                 address = string.Join(", ", new[] { request.AddressLine1?.Trim(), request.AddressLine2?.Trim(), postcode }.Where(s => !string.IsNullOrWhiteSpace(s)));
             }
             var ids = request.Lines.Select(x => x.VariantId).Distinct().ToList();
@@ -233,7 +306,7 @@ public static class WebsiteOrderEndpoints
                 .ToDictionaryAsync(v => v.Id, ct);
             if (variants.Count != ids.Count) return Results.BadRequest(new { message = "A selected item is no longer available." });
             var order = new Order { OrderType = request.OrderType, Status = OrderStatus.Placed,
-                CustomerName = request.Name.Trim(), CustomerPhone = request.Phone.Trim(), DeliveryAddress = address, DeliveryFee = fee };
+                CustomerName = request.Name.Trim(), CustomerPhone = request.Phone.Trim(), DeliveryAddress = address, DeliveryFee = fee, Notes = requiresApproval ? "Outside normal delivery radius — staff approval required; customer informed order may be declined." : null };
             foreach (var item in request.Lines)
             {
                 var variant = variants[item.VariantId];
@@ -250,9 +323,18 @@ public static class WebsiteOrderEndpoints
                     Quantity = item.Quantity, LineTotal = lineTotal, Notes = string.IsNullOrWhiteSpace(item.Notes) ? null : item.Notes.Trim(),
                     Modifiers = modifiers.Select(m => new OrderLineModifier { ModifierId = m.Id, ModifierName = m.Name, PriceAdjustment = m.PriceAdjustment }).ToList() });
             }
-            order.Subtotal = order.Lines.Sum(l => l.LineTotal); order.Total = order.Subtotal + fee;
+            order.Subtotal = order.Lines.Sum(l => l.LineTotal);
+            if (order.OrderType == OrderType.Delivery && order.Subtotal < 18m)
+                return Results.BadRequest(new { code = "delivery_minimum", message = "The minimum food subtotal for delivery is £18.00." });
+            var offer = await PromotionPricing.Best(db, config, order, request.Phone, request.PromoCode, request.IsReturningCustomer, ct);
+            if (offer.Error is not null) return Results.BadRequest(new { code = "promo_unavailable", message = offer.Error });
+            order.DiscountTotal = offer.Discount;
+            if (offer.Name is not null) order.Notes = string.Join(" ", new[] { order.Notes, offer.Name }.Where(x => !string.IsNullOrEmpty(x)));
+            order.Total = order.Subtotal + fee - order.DiscountTotal;
             if (request.ExpectedTotal is null || request.ExpectedTotal.Value != order.Total)
                 return Results.Conflict(new { message = "The order total has changed. Please refresh the menu and review your order." });
+            if (offer.CodeApplied && offer.RecordCode && !string.IsNullOrWhiteSpace(request.PromoCode))
+                db.PromoRedemptions.Add(new PromoRedemption { Code = request.PromoCode.Trim().ToUpperInvariant(), Phone = PromoCodes.NormalizePhone(request.Phone), OrderId = order.Id });
             order.Payments.Add(new Payment { Method = PaymentMethod.Cash, Status = PaymentStatus.Pending, Amount = order.Total, Provider = "WebsiteCash", ProviderReference = reference });
             order.StatusHistory.Add(new OrderStatusHistory { Status = OrderStatus.Placed, Note = "Website cash order" });
             db.Orders.Add(order);
@@ -279,13 +361,20 @@ public static class WebsiteOrderEndpoints
             return Results.Ok(new { order.OrderNumber, order.Total });
         }).RequireCors("PublicWebsiteCheckout").RequireRateLimiting("website-checkout");
     }
+    public sealed record OfferQuoteRequest(OrderType OrderType, string? Phone, decimal DeliveryFee, List<WebsiteOrderLine> Lines, string? PromoCode = null, bool IsReturningCustomer = false);
+    public sealed record PromoQuoteRequest(string? Code);
+    private static bool CardCheckoutConfigured(IConfiguration config) =>
+        config.GetValue("WebsiteCheckout:StripeSessionsEnabled", false) &&
+        (config["Stripe:SecretKey"]?.StartsWith("sk_test_", StringComparison.Ordinal) ?? false) &&
+        (config["WebsiteCheckout:StripeWebhookSecret"]?.StartsWith("whsec_", StringComparison.Ordinal) ?? false) &&
+        ValidCheckoutReturnUrl(config["WebsiteCheckout:StripeSuccessUrl"]) && ValidCheckoutReturnUrl(config["WebsiteCheckout:StripeCancelUrl"]);
     private static bool ValidCheckoutReturnUrl(string? value) =>
         Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Scheme == "https" &&
-        (uri.Host == "www.loveanise.co.uk" || uri.Host == "loveanise.co.uk") && string.IsNullOrEmpty(uri.UserInfo);
+        (uri.Host == "www.loveanise.co.uk" || uri.Host == "loveanise.co.uk" || uri.Host == "staging.anise.dotnetcloud.co.uk") && uri.IsDefaultPort && string.IsNullOrEmpty(uri.UserInfo) && string.IsNullOrEmpty(uri.Fragment);
     public sealed record DeliveryQuoteRequest(string? Postcode);
     public sealed record WebsiteStatusRequest(Guid RequestId);
     public sealed record WebsiteCashOrder(Guid RequestId, OrderType OrderType, string Name, string Phone,
-        string? AddressLine1, string? AddressLine2, string? Postcode, List<WebsiteOrderLine> Lines, decimal? ExpectedTotal, string? Email = null);
+        string? AddressLine1, string? AddressLine2, string? Postcode, List<WebsiteOrderLine> Lines, decimal? ExpectedTotal, string? Email = null, bool OutsideRadiusAcknowledged = false, string? PromoCode = null, [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool IsReturningCustomer = false);
     public sealed record WebsiteOrderLine(Guid VariantId, int Quantity, List<Guid> ModifierIds, string? Notes);
     private sealed record PostcodeLookup(PostcodeCoordinates? Result);
     private sealed record PostcodeCoordinates(double Latitude, double Longitude);

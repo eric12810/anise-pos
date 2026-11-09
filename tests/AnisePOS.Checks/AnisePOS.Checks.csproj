@@ -7,5 +7,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/AnisePOS.Api/AnisePOS.Api.csproj" />
+    <PackageReference Include="WebPush" Version="1.0.13" />
   </ItemGroup>
 </Project>
