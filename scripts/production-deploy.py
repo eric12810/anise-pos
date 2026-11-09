@@ -17,7 +17,15 @@ def main():
     expected = (settings['PROD_FTPS_EXPECTED_HOST'], settings['PROD_FTPS_EXPECTED_ROOT'], settings['PROD_DB_SERVER'], settings['PROD_DB_NAME'])
     if (a.host, a.root, a.db_server, a.db_name) != expected:
         raise SystemExit('Approved production FTPS/database identity does not match protected configuration')
-    if os.environ.get('PROD_FTPS_SECRET_HOST') != a.host or not os.environ.get('PROD_FTPS_USERNAME') or not os.environ.get('PROD_FTPS_PASSWORD'): raise SystemExit('Separate production FTPS credentials or hostname are missing')
+    missing_ftps = [name for name, value in {
+        'PROD_FTPS_SECRET_HOST': os.environ.get('PROD_FTPS_SECRET_HOST', ''),
+        'PROD_FTPS_USERNAME': os.environ.get('PROD_FTPS_USERNAME', ''),
+        'PROD_FTPS_PASSWORD': os.environ.get('PROD_FTPS_PASSWORD', ''),
+    }.items() if not value]
+    if missing_ftps:
+        raise SystemExit('Required production FTPS configuration is missing: ' + ', '.join(missing_ftps))
+    if os.environ['PROD_FTPS_SECRET_HOST'] != a.host:
+        raise SystemExit('Approved production FTPS hostname does not match LIVE_FTPS_HOST')
     if a.host == os.environ.get('STAGING_FTPS_HOST') or 'staging' in a.root.lower() or a.db_name == 'anisedb': raise SystemExit('Staging target refused for production')
     if a.mode == 'deploy' and os.environ.get('PROD_BACKUP_CONFIRMED', '').lower() != 'true':
         raise SystemExit('Production backup confirmation is missing or invalid; protected PROD_BACKUP_CONFIRMED must equal true')
