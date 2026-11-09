@@ -1,11 +1,34 @@
 using AnisePOS.Api.Domain;
 using AnisePOS.Api.Endpoints;
 using AnisePOS.Api.Notifications;
+using AnisePOS.Api;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Cors.Infrastructure;
 using Microsoft.Extensions.FileProviders;
 using System.Security.Cryptography;
 using WebPush;
+
+var corsOptions = new CorsOptions();
+WebsiteCors.Configure(corsOptions);
+var websiteOrigins = new[]
+{
+    "https://www.loveanise.co.uk",
+    "https://loveanise.co.uk",
+    "https://www.staging.loveanise.co.uk",
+    "https://staging.loveanise.co.uk"
+};
+var menuCors = corsOptions.GetPolicy("PublicWebsiteMenu")!;
+var checkoutCors = corsOptions.GetPolicy("PublicWebsiteCheckout")!;
+if (websiteOrigins.Any(origin => !menuCors.Origins.Contains(origin)) ||
+    websiteOrigins.Any(origin => !checkoutCors.Origins.Contains(origin)) ||
+    menuCors.Origins.Contains("https://unsupported.example") ||
+    !new HashSet<string>(menuCors.Methods).SetEquals(new[] { "GET" }) ||
+    !new HashSet<string>(checkoutCors.Methods).SetEquals(new[] { "POST" }) ||
+    !new HashSet<string>(checkoutCors.Headers).SetEquals(new[] { "Content-Type" }) ||
+    menuCors.AllowAnyOrigin || checkoutCors.AllowAnyOrigin)
+    throw new Exception("Website CORS origin, method or header policy checks failed.");
+Console.WriteLine("Passed website CORS origin, method, header and unsupported-origin checks.");
 
 
 if (PromoCodes.NormalizePhone("07123 456789") != PromoCodes.NormalizePhone("+44 7123 456789") ||
