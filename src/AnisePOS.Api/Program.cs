@@ -23,8 +23,8 @@ builder.Services.AddDbContext<AniseDbContext>(options =>
         sql.UseCompatibilityLevel(150);
         sql.CommandTimeout(15);
     }));
-builder.Services.AddCors(options => options.AddPolicy("PublicWebsiteMenu", policy => policy.WithOrigins("https://www.staging.loveanise.co.uk", "https://staging.anise.dotnetcloud.co.uk").WithMethods("GET")));
-builder.Services.AddCors(options => options.AddPolicy("PublicWebsiteCheckout", policy => policy.WithOrigins("https://www.staging.loveanise.co.uk", "https://staging.anise.dotnetcloud.co.uk").WithMethods("POST").WithHeaders("Content-Type")));
+builder.Services.AddCors(options => options.AddPolicy("PublicWebsiteMenu", policy => policy.WithOrigins("https://staging.loveanise.co.uk", "https://www.loveanise.co.uk", "https://loveanise.co.uk", "http://staging.anise.dotnetcloud.co.uk", "https://staging.anise.dotnetcloud.co.uk").WithMethods("GET")));
+builder.Services.AddCors(options => options.AddPolicy("PublicWebsiteCheckout", policy => policy.WithOrigins("https://staging.loveanise.co.uk", "https://www.loveanise.co.uk", "https://loveanise.co.uk", "http://staging.anise.dotnetcloud.co.uk", "https://staging.anise.dotnetcloud.co.uk").WithMethods("POST").WithHeaders("Content-Type")));
 builder.Services.AddProblemDetails();
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<GoogleMailTokenStore>();
