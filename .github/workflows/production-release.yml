@@ -27,9 +27,9 @@ jobs:
           PROD_FTPS_SECRET_HOST: ${{ secrets.LIVE_FTPS_HOST }}
           PROD_FTPS_USERNAME: ${{ secrets.LIVE_FTPS_USERNAME }}
           PROD_FTPS_PASSWORD: ${{ secrets.LIVE_FTPS_PASSWORD }}
-          PROD_DB_SERVER: ${{ vars.PROD_DB_SERVER }}
-          PROD_DB_NAME: ${{ vars.PROD_DB_NAME }}
-          PROD_BACKUP_CONFIRMED: ${{ vars.PROD_BACKUP_CONFIRMED }}
+          PROD_DB_SERVER: ${{ secrets.PROD_DB_SERVER }}
+          PROD_DB_NAME: ${{ secrets.PROD_DB_NAME }}
+          PROD_BACKUP_CONFIRMED: ${{ secrets.PROD_BACKUP_CONFIRMED }}
           STAGING_FTPS_HOST: ${{ vars.STAGING_FTPS_HOST }}
           DEPLOY_FTPS_HOST: ${{ vars.PROD_FTPS_HOST || 'pos.loveanise.co.uk' }}
           DEPLOY_FTPS_USERNAME: ${{ secrets.LIVE_FTPS_USERNAME }}
