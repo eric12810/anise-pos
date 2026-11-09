@@ -101,9 +101,8 @@ def classify(name, package):
 def inventory(ftp, root, package):
     managed_package = {name for name in package if classify(name, package) == 'managed application file'}
     remote, unhashed = remote_files(ftp, root, managed_package | {'AnisePOS.Api.dll'})
-    if 'AnisePOS.Api.dll' not in remote or 'web.config' not in remote:
-        if 'web.config' not in unhashed:
-            raise RuntimeError('Remote root does not contain the expected POS application identity files')
+    if 'AnisePOS.Api.dll' not in remote or 'web.config' not in unhashed:
+        raise RuntimeError('Remote root does not contain the expected POS application identity files')
     managed = {name: remote[name] for name in package if name in remote}
     missing = sorted(name for name in managed_package if name not in remote)
     unexpected = {name: classify(name, package) for name in unhashed}
@@ -130,7 +129,7 @@ def connect():
         ftp.login(values['LIVE_FTPS_USERNAME'], values['LIVE_FTPS_PASSWORD'])
         ftp.prot_p()
         ftp.cwd(values['PROD_FTPS_ROOT'])
-        yield ftp, values
+        yield ftp
     finally:
         try:
             ftp.quit()
