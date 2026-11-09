@@ -64,15 +64,17 @@ class ProductionDeploymentTests(unittest.TestCase):
         env = {
             'PROD_FTPS_EXPECTED_HOST': 'pos-staging.loveanise.co.uk',
             'PROD_FTPS_SECRET_HOST': 'pos-staging.loveanise.co.uk',
+            'PROD_FTPS_USERNAME': 'stageposftp',
+            'STAGING_FTPS_USERNAME': 'stageposftp',
+            'STAGING_FTPS_ROOT': '/stageposftp/wwwroot',
         }
         result = subprocess.run(
             [sys.executable, str(SCRIPT), '--mode', 'deploy', '--host', 'pos-staging.loveanise.co.uk',
-             '--root', '/liveposftp/wwwroot', '--db-server', 'mssqluk20.prosql.net',
+             '--root', '/stageposftp/wwwroot', '--db-server', 'mssqluk20.prosql.net',
              '--db-name', 'anisedatabase'],
             cwd=ROOT,
             env={**os.environ, **{
-                'PROD_FTPS_EXPECTED_ROOT': '/liveposftp/wwwroot',
-                'PROD_FTPS_USERNAME': 'liveposftp',
+                'PROD_FTPS_EXPECTED_ROOT': '/stageposftp/wwwroot',
                 'PROD_FTPS_PASSWORD': 'not-printed',
                 'PROD_DB_SERVER': 'mssqluk20.prosql.net',
                 'PROD_DB_NAME': 'anisedatabase',
@@ -83,7 +85,19 @@ class ProductionDeploymentTests(unittest.TestCase):
             capture_output=True, text=True, check=False,
         )
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('Staging target refused', result.stderr)
+        self.assertIn('account and root match the staging destination', result.stderr)
+
+    def test_shared_ftp_hostname_is_allowed_for_distinct_production_account_and_root(self):
+        result = self.run_script({
+            'STAGING_FTPS_HOST': 'pos.loveanise.co.uk',
+            'STAGING_FTPS_USERNAME': 'stageposftp',
+            'STAGING_FTPS_ROOT': '/stageposftp/wwwroot',
+            'PROD_FTPS_EXPECTED_HOST': 'pos.loveanise.co.uk',
+            'PROD_FTPS_SECRET_HOST': 'pos.loveanise.co.uk',
+            'PROD_FTPS_USERNAME': 'liveposftp',
+            'PROD_FTPS_EXPECTED_ROOT': '/liveposftp/wwwroot',
+        })
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_workflow_uses_secrets_and_only_one_input(self):
         workflow = WORKFLOW.read_text()

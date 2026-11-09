@@ -4,6 +4,7 @@ on:
     inputs:
       staging_run_id: {description: 'Exact successful staging dry-run ID', required: true, type: string}
 permissions: {contents: read, actions: read}
+concurrency: {group: anise-pos-production, cancel-in-progress: false}
 jobs:
   release:
     if: github.ref == 'refs/heads/main'
