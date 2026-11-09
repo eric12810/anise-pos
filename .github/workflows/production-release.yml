@@ -22,8 +22,8 @@ jobs:
       - run: cp artifacts/staging/release-manifest.sha256 artifacts/staging-manifest.sha256
       - name: Validate target and deploy exact approved package
         env:
-          PROD_FTPS_EXPECTED_HOST: ${{ vars.PROD_FTPS_HOST || 'pos.loveanise.co.uk' }}
-          PROD_FTPS_EXPECTED_ROOT: ${{ vars.PROD_FTPS_ROOT || '/liveposftp/wwwroot' }}
+          PROD_FTPS_EXPECTED_HOST: ${{ secrets.LIVE_FTPS_HOST }}
+          PROD_FTPS_EXPECTED_ROOT: ${{ vars.PROD_FTPS_ROOT }}
           PROD_FTPS_SECRET_HOST: ${{ secrets.LIVE_FTPS_HOST }}
           PROD_FTPS_USERNAME: ${{ secrets.LIVE_FTPS_USERNAME }}
           PROD_FTPS_PASSWORD: ${{ secrets.LIVE_FTPS_PASSWORD }}
@@ -31,10 +31,11 @@ jobs:
           PROD_DB_NAME: ${{ secrets.PROD_DB_NAME }}
           PROD_BACKUP_CONFIRMED: ${{ secrets.PROD_BACKUP_CONFIRMED }}
           STAGING_FTPS_HOST: ${{ vars.STAGING_FTPS_HOST }}
-          DEPLOY_FTPS_HOST: ${{ vars.PROD_FTPS_HOST || 'pos.loveanise.co.uk' }}
+          DEPLOYMENT_ENV: production
+          DEPLOY_FTPS_HOST: ${{ secrets.LIVE_FTPS_HOST }}
           DEPLOY_FTPS_USERNAME: ${{ secrets.LIVE_FTPS_USERNAME }}
           DEPLOY_FTPS_PASSWORD: ${{ secrets.LIVE_FTPS_PASSWORD }}
-          DEPLOY_FTPS_ROOT: ${{ vars.PROD_FTPS_ROOT || '/liveposftp/wwwroot' }}
+          DEPLOY_FTPS_ROOT: ${{ vars.PROD_FTPS_ROOT }}
           DEPLOY_CONFIRMATION_TEXT: DEPLOY production pos
           DEPLOY_CONFIRMATION: DEPLOY production pos
         run: |

@@ -9,6 +9,7 @@ from unittest import mock
 
 ROOT = Path(__file__).parents[2]
 SCRIPT = ROOT / 'scripts/production-deploy.py'
+UPLOADER = ROOT / 'scripts/upload-staging.py'
 WORKFLOW = ROOT / '.github/workflows/production-release.yml'
 
 
@@ -46,6 +47,13 @@ class ProductionDeploymentTests(unittest.TestCase):
         result = self.run_script({'PROD_BACKUP_CONFIRMED': ''})
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('backup confirmation', result.stderr.lower())
+
+    def test_missing_ftps_configuration_fails_with_setting_names_only(self):
+        result = self.run_script({'PROD_FTPS_EXPECTED_HOST': '', 'PROD_FTPS_EXPECTED_ROOT': ''})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('PROD_FTPS_EXPECTED_HOST', result.stderr)
+        self.assertIn('PROD_FTPS_EXPECTED_ROOT', result.stderr)
+        self.assertNotIn('not-printed', result.stderr)
 
     def test_configured_settings_pass_offline_preflight(self):
         result = self.run_script()
@@ -85,7 +93,20 @@ class ProductionDeploymentTests(unittest.TestCase):
         self.assertNotIn('vars.PROD_DB_SERVER', workflow)
         self.assertNotIn('vars.PROD_DB_NAME', workflow)
         self.assertNotIn('vars.PROD_BACKUP_CONFIRMED', workflow)
+        self.assertIn('PROD_FTPS_EXPECTED_HOST: ${{ secrets.LIVE_FTPS_HOST }}', workflow)
+        self.assertIn('DEPLOY_FTPS_HOST: ${{ secrets.LIVE_FTPS_HOST }}', workflow)
+        self.assertIn('DEPLOYMENT_ENV: production', workflow)
+        self.assertNotIn("vars.PROD_FTPS_HOST ||", workflow)
+        self.assertNotIn("vars.PROD_FTPS_ROOT ||", workflow)
         self.assertEqual(workflow.split('inputs:', 1)[1].count('staging_run_id:'), 1)
+
+    def test_production_uploader_has_no_staging_fallback(self):
+        uploader = UPLOADER.read_text()
+        production_block = uploader.split("if DEPLOYMENT_ENV == 'production':", 1)[1].split("else:", 1)[0]
+        self.assertNotIn('STAGING_FTPS_PASSWORD', production_block)
+        self.assertNotIn('stageposftp', production_block)
+        self.assertNotIn('/stageposftp/wwwroot', production_block)
+        self.assertIn("DEPLOYED_MANIFEST = '.anise-pos-production-deployment.json'", production_block)
 
 
 if __name__ == '__main__':

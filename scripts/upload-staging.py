@@ -1,4 +1,4 @@
-"""Explicit FTPS staging upload. Default mode only checks the connection."""
+"""Explicit FTPS upload with separate staging and production configurations."""
 import argparse
 import ftplib
 import hashlib
@@ -13,14 +13,25 @@ import subprocess
 import tempfile
 from urllib.parse import quote
 
-HOST = os.environ.get('DEPLOY_FTPS_HOST', 'wsuk32.pronameserver.com')
-USER = os.environ.get('DEPLOY_FTPS_USERNAME', 'stageposftp')
-REMOTE_ROOT = os.environ.get('DEPLOY_FTPS_ROOT', '/stageposftp/wwwroot')
-CONFIRMATION = os.environ.get('DEPLOY_CONFIRMATION_TEXT', 'DEPLOY pos-staging.loveanise.co.uk')
+DEPLOYMENT_ENV = os.environ.get('DEPLOYMENT_ENV', 'staging').lower()
+if DEPLOYMENT_ENV not in {'staging', 'production'}:
+    raise ValueError('Unsupported FTPS deployment environment')
+
+if DEPLOYMENT_ENV == 'production':
+    HOST = os.environ.get('DEPLOY_FTPS_HOST', '')
+    USER = os.environ.get('DEPLOY_FTPS_USERNAME', '')
+    REMOTE_ROOT = os.environ.get('DEPLOY_FTPS_ROOT', '')
+    DEPLOYED_MANIFEST = '.anise-pos-production-deployment.json'
+    CONFIRMATION = os.environ.get('DEPLOY_CONFIRMATION_TEXT', 'DEPLOY production pos')
+else:
+    HOST = os.environ.get('DEPLOY_FTPS_HOST', 'wsuk32.pronameserver.com')
+    USER = os.environ.get('DEPLOY_FTPS_USERNAME', 'stageposftp')
+    REMOTE_ROOT = os.environ.get('DEPLOY_FTPS_ROOT', '/stageposftp/wwwroot')
+    DEPLOYED_MANIFEST = '.anise-pos-staging-deployment.json'
+    CONFIRMATION = os.environ.get('DEPLOY_CONFIRMATION_TEXT', 'DEPLOY pos-staging.loveanise.co.uk')
 
 
 MAINTENANCE = b'<html><body>Staging maintenance</body></html>'
-DEPLOYED_MANIFEST = '.anise-pos-staging-deployment.json'
 PENDING_MANIFEST = DEPLOYED_MANIFEST + '.pending'
 BACKUP_MANIFEST = DEPLOYED_MANIFEST + '.previous'
 MANIFEST_VERSION = 1
@@ -194,13 +205,29 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--deploy', action='store_true')
     args = parser.parse_args()
+    if DEPLOYMENT_ENV == 'production':
+        missing = [name for name, value in {
+            'DEPLOY_FTPS_HOST': HOST,
+            'DEPLOY_FTPS_USERNAME': USER,
+            'DEPLOY_FTPS_PASSWORD': os.environ.get('DEPLOY_FTPS_PASSWORD', ''),
+            'DEPLOY_FTPS_ROOT': REMOTE_ROOT,
+        }.items() if not value]
+        if missing:
+            raise ValueError('Production FTPS configuration is missing: ' + ', '.join(missing))
+        if os.environ.get('STAGING_FTPS_HOST') and HOST == os.environ['STAGING_FTPS_HOST']:
+            raise ValueError('Production FTPS host matches the staging host')
+        if 'staging' in REMOTE_ROOT.lower():
+            raise ValueError('Production FTPS root is a staging directory')
+        password = os.environ['DEPLOY_FTPS_PASSWORD']
+    else:
+        password = os.environ.get('DEPLOY_FTPS_PASSWORD') or os.environ.get('STAGING_FTPS_PASSWORD')
+
     if args.deploy and os.environ.get('DEPLOY_CONFIRMATION') != CONFIRMATION:
         raise ValueError('Explicit deployment confirmation is required')
-    if (os.environ.get('DEPLOY_FTPS_HOST') or os.environ.get('STAGING_FTPS_HOST')) != HOST or (os.environ.get('DEPLOY_FTPS_USERNAME') or os.environ.get('STAGING_FTPS_USERNAME')) != USER:
+    if DEPLOYMENT_ENV == 'staging' and ((os.environ.get('DEPLOY_FTPS_HOST') or os.environ.get('STAGING_FTPS_HOST')) != HOST or (os.environ.get('DEPLOY_FTPS_USERNAME') or os.environ.get('STAGING_FTPS_USERNAME')) != USER):
         raise ValueError('Credentials must match the approved staging host and account')
-    password = os.environ.get('DEPLOY_FTPS_PASSWORD') or os.environ.get('STAGING_FTPS_PASSWORD')
     if not password:
-        raise ValueError('Staging password secret is missing')
+        raise ValueError(('Production' if DEPLOYMENT_ENV == 'production' else 'Staging') + ' password secret is missing')
     files = package_files(Path('artifacts/staging'), Path('artifacts/staging-manifest.sha256'))
     with StagingFTP(context=ssl.create_default_context(), timeout=60) as ftp:
         print('Step: connect to staging FTPS', flush=True)
@@ -215,7 +242,7 @@ def main():
         ftp.cwd(REMOTE_ROOT)
         print('Step: list staging root', flush=True)
         directory_names(ftp)
-        print('Verified TLS connection and encrypted directory listing at /stageposftp/wwwroot.')
+        print('Verified TLS connection and encrypted directory listing at configured FTPS root.')
         if args.deploy:
             upload(ftp, files)
         else:
