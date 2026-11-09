@@ -1,4 +1,5 @@
 import importlib.util
+import ftplib
 import os
 import subprocess
 import sys
@@ -21,6 +22,60 @@ def production_uploader_module():
     with mock.patch.dict(os.environ, {'DEPLOYMENT_ENV': 'production'}, clear=False):
         spec.loader.exec_module(module)
     return module
+
+
+def baseline_module():
+    spec = importlib.util.spec_from_file_location('production_baseline', BASELINE)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class NlstFTP:
+    def __init__(self):
+        self.path = '/root'
+        self.retrieved = []
+        self.directories = {'/root', '/root/bin', '/root/app_data'}
+        self.files = {
+            '/root/AnisePOS.Api.dll': b'api',
+            '/root/web.config': b'secret-config',
+            '/root/bin/dep.dll': b'dep',
+            '/root/app_data/customer.db': b'sensitive-data',
+        }
+
+    def cwd(self, path):
+        if path.startswith('/'):
+            candidate = path
+        else:
+            candidate = self.path.rstrip('/') + '/' + path
+        if candidate not in self.directories:
+            raise ftplib.error_perm('550 not a directory')
+        self.path = candidate
+
+    def mlsd(self):
+        raise ftplib.error_perm('500 MLSD unsupported')
+
+    def nlst(self):
+        prefix = self.path.rstrip('/') + '/'
+        names = []
+        for candidate in list(self.directories) + list(self.files):
+            if candidate.startswith(prefix):
+                remainder = candidate[len(prefix):]
+                if '/' not in remainder:
+                    names.append(remainder)
+        return names
+
+    def size(self, name):
+        candidate = self.path.rstrip('/') + '/' + name
+        if candidate not in self.files:
+            raise ftplib.error_perm('550 no size')
+        return len(self.files[candidate])
+
+    def retrbinary(self, command, callback):
+        name = command.split(' ', 1)[1]
+        candidate = self.path.rstrip('/') + '/' + name
+        self.retrieved.append(candidate)
+        callback(self.files[candidate])
 
 
 class ManifestFTP:
@@ -196,6 +251,31 @@ class ProductionDeploymentTests(unittest.TestCase):
         self.assertIn("ftp.rename(PENDING, MANIFEST)", baseline)
         self.assertIn("names_after", baseline)
         self.assertIn('hashlib.sha256()', baseline)
+
+    def test_nlst_fallback_recurses_and_does_not_hash_sensitive_files(self):
+        module = baseline_module()
+        ftp = NlstFTP()
+        hashed, unhashed = module.remote_files(ftp, '/root', {'AnisePOS.Api.dll', 'bin/dep.dll'})
+        self.assertEqual(set(hashed), {'AnisePOS.Api.dll', 'bin/dep.dll'})
+        self.assertIn('web.config', unhashed)
+        self.assertIn('app_data/customer.db', unhashed)
+        self.assertNotIn('/root/web.config', ftp.retrieved)
+        self.assertNotIn('/root/app_data/customer.db', ftp.retrieved)
+        self.assertIn('/root/bin/dep.dll', ftp.retrieved)
+
+    def test_connection_context_closes_on_exception(self):
+        module = baseline_module()
+        ftp = mock.Mock()
+        ftp.cwd.side_effect = RuntimeError('directory failure')
+        ftp.quit.side_effect = RuntimeError('already closed')
+        with mock.patch.dict(os.environ, {
+            'LIVE_FTPS_HOST': 'host', 'LIVE_FTPS_USERNAME': 'user',
+            'LIVE_FTPS_PASSWORD': 'not-printed', 'PROD_FTPS_ROOT': '/root'}), \
+                mock.patch.object(module.ftplib, 'FTP_TLS', return_value=ftp):
+            with self.assertRaises(RuntimeError):
+                with module.connect():
+                    pass
+        ftp.close.assert_called()
 
 
 if __name__ == '__main__':

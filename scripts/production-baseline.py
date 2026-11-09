@@ -4,6 +4,7 @@ Inspection is read-only. Bootstrap publishes only the manifest after backup,
 owner-confirmation, absence checks, and a second remote-hash inventory.
 """
 import argparse
+from contextlib import contextmanager
 import ftplib
 import hashlib
 import io
@@ -41,8 +42,9 @@ def package_names(package):
     return rows
 
 
-def remote_files(ftp, root):
-    result = {}
+def remote_files(ftp, root, hash_names):
+    hashed = {}
+    unhashed = []
 
     def walk(path):
         ftp.cwd(path)
@@ -51,7 +53,20 @@ def remote_files(ftp, root):
         except ftplib.error_perm as error:
             if str(error)[:3] not in {'500', '502', '504'}:
                 raise RuntimeError('Production directory listing failed') from error
-            entries = [(name, {'type': 'file'}) for name in ftp.nlst()]
+            entries = []
+            for listed in ftp.nlst():
+                name = PurePosixPath(listed).name
+                try:
+                    ftp.cwd(name)
+                except ftplib.error_perm:
+                    try:
+                        ftp.size(name)
+                    except Exception as error:
+                        raise RuntimeError('Could not distinguish an NLST entry as file or directory') from error
+                    entries.append((name, {'type': 'file'}))
+                else:
+                    ftp.cwd(path)
+                    entries.append((name, {'type': 'dir'}))
         for name, facts in entries:
             if name in {'.', '..'}:
                 continue
@@ -61,12 +76,15 @@ def remote_files(ftp, root):
                 walk(PurePosixPath(path).joinpath(name).as_posix())
                 ftp.cwd(path)
             elif kind == 'file':
-                digest = hashlib.sha256()
-                ftp.retrbinary('RETR ' + name, digest.update)
-                result[relative] = digest.hexdigest()
+                if relative in hash_names:
+                    digest = hashlib.sha256()
+                    ftp.retrbinary('RETR ' + name, digest.update)
+                    hashed[relative] = digest.hexdigest()
+                else:
+                    unhashed.append(relative)
 
     walk(root)
-    return result
+    return hashed, unhashed
 
 
 def classify(name, package):
@@ -81,33 +99,43 @@ def classify(name, package):
 
 
 def inventory(ftp, root, package):
-    remote = remote_files(ftp, root)
+    managed_package = {name for name in package if classify(name, package) == 'managed application file'}
+    remote, unhashed = remote_files(ftp, root, managed_package | {'AnisePOS.Api.dll'})
     if 'AnisePOS.Api.dll' not in remote or 'web.config' not in remote:
-        raise RuntimeError('Remote root does not contain the expected POS application identity files')
+        if 'web.config' not in unhashed:
+            raise RuntimeError('Remote root does not contain the expected POS application identity files')
     managed = {name: remote[name] for name in package if name in remote}
-    missing = sorted(name for name in package if name not in remote)
-    unexpected = {name: classify(name, package) for name in remote if name not in package}
+    missing = sorted(name for name in managed_package if name not in remote)
+    unexpected = {name: classify(name, package) for name in unhashed}
     return {
         'version': 1,
         'application': APPLICATION,
         'root': root,
         'package_files': sorted(package),
         'remote_files': remote,
+        'unhashed_remote_files': sorted(unhashed),
         'managed_remote_hashes': managed,
         'missing_from_remote': missing,
         'unexpected_remote_files': unexpected,
     }
 
 
+@contextmanager
 def connect():
     values = config()
     ftp = ftplib.FTP_TLS(context=ssl.create_default_context(), timeout=60)
-    ftp.connect(values['LIVE_FTPS_HOST'], 21)
-    ftp.auth()
-    ftp.login(values['LIVE_FTPS_USERNAME'], values['LIVE_FTPS_PASSWORD'])
-    ftp.prot_p()
-    ftp.cwd(values['PROD_FTPS_ROOT'])
-    return ftp, values
+    try:
+        ftp.connect(values['LIVE_FTPS_HOST'], 21)
+        ftp.auth()
+        ftp.login(values['LIVE_FTPS_USERNAME'], values['LIVE_FTPS_PASSWORD'])
+        ftp.prot_p()
+        ftp.cwd(values['PROD_FTPS_ROOT'])
+        yield ftp, values
+    finally:
+        try:
+            ftp.quit()
+        except Exception:
+            ftp.close()
 
 
 def inspect(args):
@@ -132,7 +160,7 @@ def inspect(args):
         f"Remote files: {len(report['remote_files'])}\n"
         f"Managed files observed: {len(report['managed_remote_hashes'])}\n"
         f"Missing approved package files: {len(report['missing_from_remote'])}\n"
-        f"Unexpected/configuration/runtime files: {len(report['unexpected_remote_files'])}\n"
+        f"Unexpected/configuration/runtime files: {len(report['unhashed_remote_files'])}\n"
         "No remote files were modified.\n"
     )
 
@@ -150,8 +178,8 @@ def bootstrap(args):
         raise SystemExit('Inspection report is missing verified production identity or managed hashes')
     with connect() as ftp:
         root = os.environ['PROD_FTPS_ROOT']
-        first = remote_files(ftp, root)
-        names = set(first)
+        first, unhashed = remote_files(ftp, root, set(json.loads(Path(args.inventory).read_text())['managed_remote_hashes']) | {'AnisePOS.Api.dll'})
+        names = set(first) | set(unhashed)
         if MANIFEST in names or PENDING in names or PREVIOUS in names or MAINTENANCE in names:
             raise SystemExit('Production baseline publication refused: manifest or interrupted-deployment marker exists')
         expected = report['managed_remote_hashes']
