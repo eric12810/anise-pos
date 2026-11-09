@@ -39,15 +39,20 @@ if workflow.get('path') != '.github/workflows/staging-dry-run.yml' or workflow.g
     raise SystemExit('Run is not the approved POS staging dry-run workflow')
 
 commit_sha = run.get('head_sha', '')
-expected = 'anise-pos-staging-' + commit_sha
 matches = [
     artifact
     for artifact in get('/actions/runs/' + run_id + '/artifacts').get('artifacts', [])
-    if artifact.get('name') == expected and not artifact.get('expired')
+    if artifact.get('name', '').startswith('anise-pos-staging-')
+    and not artifact.get('expired')
+    and artifact.get('workflow_run', {}).get('id') == int(run_id)
+    and artifact.get('workflow_run', {}).get('repository_id') == run.get('repository', {}).get('id')
+    and artifact.get('workflow_run', {}).get('head_sha') == commit_sha
 ]
 if len(matches) != 1:
-    raise SystemExit('Expected one non-expired POS staging artifact; found ' + str(len(matches)))
+    raise SystemExit('Expected one non-expired POS staging artifact for this run and commit; found ' + str(len(matches)))
+
+artifact_name = matches[0]['name']
 
 with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-    output.write('artifact_name=' + expected + '\ncommit_sha=' + commit_sha + '\n')
-print('Resolved approved POS staging dry run artifact ' + expected)
+    output.write('artifact_name=' + artifact_name + '\ncommit_sha=' + commit_sha + '\n')
+print('Resolved approved POS staging dry run artifact ' + artifact_name)
