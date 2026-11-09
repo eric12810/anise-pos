@@ -24,8 +24,8 @@ DEPLOYED_MANIFEST = '.anise-pos-staging-deployment.json'
 PENDING_MANIFEST = DEPLOYED_MANIFEST + '.pending'
 BACKUP_MANIFEST = DEPLOYED_MANIFEST + '.previous'
 MANIFEST_VERSION = 1
-SHA256_HEX = re.compile(r'[0-9a-f]{64}\\Z')
-SAFE_MANIFEST_PATH = re.compile(r'[A-Za-z0-9_./-]+\\Z')
+SHA256_HEX = re.compile(r'[0-9a-f]{64}\Z')
+SAFE_MANIFEST_PATH = re.compile(r'[A-Za-z0-9_./-]+\Z')
 
 
 class StagingFTP(ftplib.FTP_TLS):
