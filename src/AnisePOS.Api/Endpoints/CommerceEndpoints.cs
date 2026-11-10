@@ -379,7 +379,7 @@ public static class CommerceEndpoints
                     return Results.ValidationProblem(new Dictionary<string, string[]> { ["modifiers"] = ["Modifier selections do not meet the product's requirements."] });
 
                 var modifierTotal = modifiers.Sum(modifier => modifier.PriceAdjustment);
-                var line = new OrderLine { ProductId = variant.ProductId, ProductVariantId = variant.Id, ProductName = variant.Product.Name, VariantName = variant.Name, UnitPrice = variant.Price, Quantity = requestLine.Quantity, LineTotal = (variant.Price + modifierTotal) * requestLine.Quantity };
+                var line = new OrderLine { ProductId = variant.ProductId, ProductVariantId = variant.Id, ProductName = variant.Product.Name, VariantName = variant.Name, UnitPrice = variant.Price, Quantity = requestLine.Quantity, LineTotal = (variant.Price + modifierTotal) * requestLine.Quantity, Notes = requestLine.Notes?.Trim() };
                 line.Modifiers = modifiers.Select(modifier => new OrderLineModifier { ModifierId = modifier.Id, ModifierName = modifier.Name, PriceAdjustment = modifier.PriceAdjustment }).ToList();
                 order.Lines.Add(line);
             }
@@ -583,7 +583,7 @@ public sealed record UpdateVariantRequest(string Name, decimal Price, bool IsAva
 public sealed record UpdateModifierGroupRequest(string Name, int MinimumSelections, int MaximumSelections);
 public sealed record UpdateModifierRequest(string Name, decimal PriceAdjustment, bool IsAvailable);
 public sealed record CreateOrderRequest(Guid? CustomerId, OrderType OrderType, PaymentMethod PaymentMethod, string? CustomerName, string? CustomerPhone, string? Notes, string? DeliveryAddress, decimal DeliveryFee, string? CustomFeeDescription, decimal CustomFee, string? Source, List<CreateOrderLineRequest> Lines, int? EstimatedMinutes = null);
-public sealed record CreateOrderLineRequest(Guid VariantId, int Quantity, List<Guid> ModifierIds);
+public sealed record CreateOrderLineRequest(Guid VariantId, int Quantity, List<Guid> ModifierIds, string? Notes = null);
 public sealed record MenuCategoryResponse(Guid Id, string Name, string Slug, List<MenuProductResponse> Products);
 public sealed record MenuProductResponse(Guid Id, string Name, string Slug, string? Description, bool IsVegan, string? VeganSection, string? ChineseName, string? ImageUrl, List<MenuVariantResponse> Variants, List<MenuModifierGroupResponse> ModifierGroups);
 public sealed record MenuVariantResponse(Guid Id, string Name, string Sku, decimal Price);

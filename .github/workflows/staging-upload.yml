@@ -9,7 +9,7 @@ on:
         options: [check, deploy]
         default: check
       confirmation:
-        description: 'For upload, type: DEPLOY pos'
+        description: 'For upload, type exactly: DEPLOY pos-staging.loveanise.co.uk'
         type: string
         default: ''
 

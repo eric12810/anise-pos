@@ -44,6 +44,7 @@ public sealed class ReceiptPrinter(IConfiguration configuration)
             Line($"{item.Quantity} x {item.ProductName}" + (item.VariantName == "Regular" ? "" : " - " + item.VariantName));
             foreach (var modifier in item.Modifiers.OrderBy(x => x.CreatedAtUtc))
                 Line("  + " + modifier.ModifierName + (!kitchen && modifier.PriceAdjustment != 0 ? " (" + Money(modifier.PriceAdjustment) + ")" : ""));
+            if (!string.IsNullOrWhiteSpace(item.Notes)) Line("  NOTE: " + item.Notes);
             if (!kitchen) Line("    " + Money(item.LineTotal));
         }
         if (!string.IsNullOrWhiteSpace(order.Notes)) { Line(); Line("NOTE: " + order.Notes); }

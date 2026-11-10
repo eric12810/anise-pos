@@ -168,7 +168,8 @@ class PosAssetTests(unittest.TestCase):
         root = Path('src/AnisePOS.Api/wwwroot')
         source = (root / 'pos.html').read_bytes()
         source_text = source.decode('utf-8')
-        for marker in ('attachDishPress', 'cartLineKey', 'pointerdown', 'requiresSelection'):
+        for marker in ('attachDishPress', 'cartLineKey', 'pointerdown', 'requiresSelection',
+                       'special-instructions', 'custom-quantity', 'notes:l.instructions||null'):
             self.assertIn(marker, source_text)
         self.assertNotIn('onclick=()=>openProduct(cat.products', source_text)
 
