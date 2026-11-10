@@ -1,3 +1,4 @@
+import ast
 import importlib.util
 import ftplib
 from contextlib import contextmanager
@@ -202,6 +203,20 @@ class ProductionDeploymentTests(unittest.TestCase):
         diagnostic = (ROOT / '.github/workflows/production-ftps-diagnostic.yml').read_text()
         self.assertIn('production-ftps-diagnostic.py', diagnostic)
         self.assertIn('PROD_FTPS_ROOT: ${{ vars.PROD_FTPS_ROOT }}', diagnostic)
+
+    def test_staging_resolver_accepts_main_only_when_release_sha_matches(self):
+        path = ROOT / 'scripts/resolve-staging-release.py'
+        tree = ast.parse(path.read_text())
+        function = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                        and node.name == 'accepted_release_branch')
+        namespace = {}
+        exec(compile(ast.Module(body=[function], type_ignores=[]), str(path), 'exec'), namespace)
+        accepts = namespace['accepted_release_branch']
+        run = {'head_sha': 'd6669b9'}
+        self.assertTrue(accepts({**run, 'head_branch': 'staging'}, 'other-sha'))
+        self.assertTrue(accepts({**run, 'head_branch': 'main'}, 'd6669b9'))
+        self.assertFalse(accepts({**run, 'head_branch': 'main'}, 'other-sha'))
+        self.assertFalse(accepts({**run, 'head_branch': 'feature'}, 'd6669b9'))
 
     def test_production_uploader_has_no_staging_fallback(self):
         uploader = UPLOADER.read_text()
