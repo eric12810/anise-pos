@@ -47,13 +47,25 @@ def marker_state(ftp, root):
     present = tuple(marker for marker in MARKERS if marker in root_names(ftp, root))
     result = {'present': present, 'baseline': 'absent', 'recovery': ()}
     if MANIFEST in present:
-        data = io.BytesIO()
-        ftp.cwd(root)
-        ftp.retrbinary('RETR ' + MANIFEST, data.write)
-        valid, detail = validate_manifest(data.getvalue())
+        valid, detail, _ = inspect_marker_file(ftp, root, MANIFEST)
         result['baseline'] = detail if valid else 'invalid manifest: ' + detail
+    if PENDING in present:
+        valid, detail, checksum = inspect_marker_file(ftp, root, PENDING)
+        result['pending'] = {'valid': valid, 'detail': detail, 'sha256': checksum}
     result['recovery'] = tuple(marker for marker in present if marker != MANIFEST)
     return result
+
+
+def inspect_marker_file(ftp, root, name):
+    data = io.BytesIO()
+    ftp.cwd(root)
+    ftp.retrbinary('RETR ' + name, data.write)
+    content = data.getvalue()
+    checksum = hashlib.sha256(content).hexdigest()
+    if name == MANIFEST or name == PENDING:
+        valid, detail = validate_manifest(content)
+        return valid, detail, checksum
+    return True, 'present', checksum
 
 
 def check_health(opener=urlopen):
@@ -83,6 +95,10 @@ def main():
         state = marker_state(ftp, config['PROD_FTPS_ROOT'])
     print('Protected production markers present: ' + (', '.join(state['present']) if state['present'] else 'none'))
     print('Baseline status: ' + state['baseline'])
+    if PENDING in state['present']:
+        pending = state['pending']
+        print('Pending manifest: ' + ('valid' if pending['valid'] else 'invalid') +
+              f" ({pending['detail']}); sha256={pending['sha256']}")
     if state['recovery']:
         print('Recovery required: investigate the listed marker state with the hosting/deployment owner; no marker was changed')
     elif state['baseline'].startswith('valid production baseline'):

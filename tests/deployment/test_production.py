@@ -500,6 +500,20 @@ class ProductionDeploymentTests(unittest.TestCase):
         response.__exit__ = mock.Mock(return_value=False)
         self.assertTrue(module.check_health(lambda *args, **kwargs: response))
 
+    def test_standalone_marker_diagnostic_inspects_pending_manifest_without_writing(self):
+        module = marker_diagnostic_module()
+        payload = ('{"version":1,"environment":"production","application":"pos.loveanise.co.uk",'
+                   '"files":{"AnisePOS.Api.dll":"' + 'b' * 64 + '"}}').encode()
+        fake = mock.Mock()
+        fake.mlsd.return_value = [(module.PENDING, {'type': 'file'})]
+        fake.retrbinary.side_effect = lambda command, callback: callback(payload)
+        state = module.marker_state(fake, '/root')
+        self.assertTrue(state['pending']['valid'])
+        self.assertEqual(state['pending']['sha256'], __import__('hashlib').sha256(payload).hexdigest())
+        fake.storbinary.assert_not_called()
+        fake.rename.assert_not_called()
+        fake.delete.assert_not_called()
+
     @staticmethod
     def _connection(ftp):
         @contextmanager
