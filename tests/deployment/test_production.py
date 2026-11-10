@@ -266,6 +266,53 @@ class ProductionDeploymentTests(unittest.TestCase):
         self.assertNotIn('/root/app_data/customer.db', ftp.retrieved)
         self.assertIn('/root/bin/dep.dll', ftp.retrieved)
 
+    def test_remote_hash_retries_interrupted_transfer_from_empty_digest(self):
+        module = baseline_module()
+        class SlowThenGood:
+            def __init__(self, fail):
+                self.fail = fail
+                self.calls = 0
+            def cwd(self, path): pass
+            def mlsd(self): return [('managed.dll', {'type': 'file'})]
+            def retrbinary(self, command, callback, blocksize=None):
+                self.calls += 1
+                callback(b'partial')
+                if self.fail:
+                    self.fail = False
+                    raise TimeoutError('slow transfer')
+                callback(b'complete')
+            def close(self): pass
+        first = SlowThenGood(True)
+        second = SlowThenGood(False)
+        logs = []
+        hashed, _ = module.remote_files(first, '/root', {'managed.dll'}, reconnect=lambda: second, log=logs.append)
+        self.assertEqual(hashed['managed.dll'], __import__('hashlib').sha256(b'partialcomplete').hexdigest())
+        self.assertEqual(first.calls, 1)
+        self.assertEqual(second.calls, 1)
+        self.assertTrue(any('retry' in line for line in logs))
+
+    def test_remote_hash_retry_exhaustion_identifies_exact_operation(self):
+        module = baseline_module()
+        class AlwaysTimeout:
+            def cwd(self, path): pass
+            def mlsd(self): return [('managed.dll', {'type': 'file'})]
+            def retrbinary(self, command, callback, blocksize=None): raise TimeoutError('read operation timed out')
+            def close(self): pass
+        with self.assertRaisesRegex(RuntimeError, 'read-only hash of managed.dll'):
+            module.remote_files(AlwaysTimeout(), '/root', {'managed.dll'}, reconnect=lambda: AlwaysTimeout(), log=lambda _: None)
+
+    def test_bootstrap_rejects_confirmation_only_backup_reference(self):
+        module = baseline_module()
+        with self._temporary_directory() as temporary:
+            inventory = Path(temporary) / 'inventory.json'
+            inventory.write_text('{"application":"pos.loveanise.co.uk","managed_remote_hashes":{"x":"y"}}\n')
+            env = {'PROD_BASELINE_BACKUP_VERIFIED': 'true',
+                   'PROD_BASELINE_APP_BACKUP_REFERENCE': 'confirmed',
+                   'PROD_BASELINE_SQL_BACKUP_REFERENCE': 'sql-ref'}
+            with mock.patch.dict(os.environ, env, clear=False):
+                with self.assertRaisesRegex(SystemExit, 'only a confirmation flag'):
+                    module.bootstrap(SimpleNamespace(inventory=str(inventory)))
+
     def test_connection_context_closes_on_exception(self):
         module = baseline_module()
         ftp = mock.Mock()
