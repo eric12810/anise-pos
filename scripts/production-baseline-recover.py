@@ -19,6 +19,7 @@ def fail(message):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--inventory', required=True)
+    parser.add_argument('--evidence', required=True, help='New local path for an exact pending-manifest copy')
     parser.add_argument('--owner-approval', required=True)
     args = parser.parse_args()
     if args.owner_approval != 'FINALISE PRODUCTION BASELINE PENDING MANIFEST':
@@ -42,6 +43,11 @@ def main():
         ftp.cwd(root)
         ftp.retrbinary('RETR ' + baseline.PENDING, data.extend)
         pending_sha = hashlib.sha256(data).hexdigest()
+        evidence = Path(args.evidence)
+        if evidence.exists():
+            fail('evidence path already exists; choose a new path')
+        evidence.write_bytes(bytes(data))
+        print('Preserved local pending-manifest evidence: ' + str(evidence))
         pending = json.loads(bytes(data).decode('utf-8'))
         if (pending.get('version') != 1 or pending.get('environment') != 'production' or
                 pending.get('application') != baseline.APPLICATION or pending.get('files') != expected or

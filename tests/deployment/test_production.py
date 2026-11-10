@@ -518,9 +518,10 @@ class ProductionDeploymentTests(unittest.TestCase):
     def test_recovery_command_requires_separate_owner_approval_before_connecting(self):
         inventory = ROOT / 'tests/deployment/temporary-recovery-inventory.json'
         inventory.write_text('{"application":"pos.loveanise.co.uk","managed_remote_hashes":{}}\n')
+        evidence = ROOT / 'tests/deployment/temporary-recovery-evidence.json'
         try:
             result = subprocess.run(
-                [sys.executable, str(RECOVERY), '--inventory', str(inventory), '--owner-approval', 'wrong'],
+                [sys.executable, str(RECOVERY), '--inventory', str(inventory), '--evidence', str(evidence), '--owner-approval', 'wrong'],
                 cwd=ROOT, capture_output=True, text=True, check=False,
                 env={**os.environ, 'PROD_BASELINE_RECOVERY_BACKUP_VERIFIED': 'true'},
             )
@@ -529,6 +530,7 @@ class ProductionDeploymentTests(unittest.TestCase):
             self.assertNotIn('rename', result.stderr.lower())
         finally:
             inventory.unlink(missing_ok=True)
+            evidence.unlink(missing_ok=True)
 
     @staticmethod
     def _connection(ftp):
