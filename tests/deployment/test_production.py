@@ -17,6 +17,7 @@ UPLOADER = ROOT / 'scripts/upload-staging.py'
 DIAGNOSTIC = ROOT / 'scripts/production-ftps-diagnostic.py'
 BASELINE = ROOT / 'scripts/production-baseline.py'
 MARKER_DIAGNOSTIC = ROOT / 'scripts/production-baseline-marker-diagnostic.py'
+RECOVERY = ROOT / 'scripts/production-baseline-recover.py'
 WORKFLOW = ROOT / '.github/workflows/production-release.yml'
 
 
@@ -513,6 +514,21 @@ class ProductionDeploymentTests(unittest.TestCase):
         fake.storbinary.assert_not_called()
         fake.rename.assert_not_called()
         fake.delete.assert_not_called()
+
+    def test_recovery_command_requires_separate_owner_approval_before_connecting(self):
+        inventory = ROOT / 'tests/deployment/temporary-recovery-inventory.json'
+        inventory.write_text('{"application":"pos.loveanise.co.uk","managed_remote_hashes":{}}\n')
+        try:
+            result = subprocess.run(
+                [sys.executable, str(RECOVERY), '--inventory', str(inventory), '--owner-approval', 'wrong'],
+                cwd=ROOT, capture_output=True, text=True, check=False,
+                env={**os.environ, 'PROD_BASELINE_RECOVERY_BACKUP_VERIFIED': 'true'},
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('separate owner approval', result.stderr)
+            self.assertNotIn('rename', result.stderr.lower())
+        finally:
+            inventory.unlink(missing_ok=True)
 
     @staticmethod
     def _connection(ftp):
