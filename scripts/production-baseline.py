@@ -50,12 +50,20 @@ def _operation_error(operation, error):
 
 
 def remote_files(ftp, root, hash_names, reconnect=None, log=print):
+    root = PurePosixPath(root).as_posix().rstrip('/') or '/'
     hashed = {}
     unhashed = []
     checked = 0
     total = len(hash_names)
+    current_dir = None
+    replacement_ftps = []
 
-    def retry(operation, action, restore=None):
+    def transient(error):
+        if isinstance(error, ftplib.error_perm):
+            return str(error)[:3] in {'421', '425', '426', '450', '451', '452'}
+        return isinstance(error, (OSError, EOFError, TimeoutError, ConnectionError))
+
+    def retry(operation, action, restore_path=None):
         nonlocal ftp
         last_error = None
         for attempt in range(1, FTP_RETRIES + 1):
@@ -63,7 +71,7 @@ def remote_files(ftp, root, hash_names, reconnect=None, log=print):
                 return action()
             except (OSError, EOFError, TimeoutError, ftplib.Error) as error:
                 last_error = error
-                if attempt == FTP_RETRIES or reconnect is None:
+                if attempt == FTP_RETRIES or reconnect is None or not transient(error):
                     raise _operation_error(operation, error) from error
                 log(f'FTPS retry {attempt}/{FTP_RETRIES - 1}: {operation}')
                 try:
@@ -72,45 +80,48 @@ def remote_files(ftp, root, hash_names, reconnect=None, log=print):
                     pass
                 time.sleep(min(attempt, 2))
                 ftp = reconnect()
-                if restore:
-                    restore(ftp)
+                replacement_ftps.append(ftp)
+                if restore_path:
+                    ftp.cwd(restore_path)
         raise _operation_error(operation, last_error)
 
     def cwd(path):
-        retry(f'change directory to {path}', lambda: ftp.cwd(path))
+        nonlocal current_dir
+        path = PurePosixPath(path).as_posix()
+        retry(f'change directory to {path}', lambda: ftp.cwd(path), restore_path=current_dir)
+        current_dir = path
 
-    def hash_file(path, relative, index):
+    def hash_file(directory, name, relative, index):
         nonlocal checked
         log(f'Verifying managed file {index}/{total}: {relative}')
         def read():
             digest = hashlib.sha256()
             # A new digest is created for every attempt: partial transfers are discarded.
             # The default block size is compatible with Winserve's FTPS data channel.
-            ftp.retrbinary('RETR ' + PurePosixPath(path).name, digest.update)
+            ftp.retrbinary('RETR ' + name, digest.update)
             return digest.hexdigest()
-        result = retry(f'read-only hash of {relative}', read, lambda connection: connection.cwd(str(PurePosixPath(path).parent)))
+        result = retry(f'read-only hash of {relative}', read, restore_path=directory)
         checked += 1
         return result
 
     def walk(path):
         cwd(path)
         try:
-            entries = retry(f'list directory {path}', lambda: list(ftp.mlsd()))
-        except RuntimeError as error:
-            if '500' not in str(error) and '502' not in str(error) and '504' not in str(error):
-                raise
+            # Unsupported MLSD is a capability response, not a transient failure.
+            entries = list(ftp.mlsd())
+        except ftplib.error_perm as error:
+            if str(error)[:3] not in {'500', '502', '504'}:
+                raise _operation_error(f'list directory {path}', error) from error
             entries = []
-            for listed in retry(f'list directory {path} with NLST', ftp.nlst):
+            for listed in retry(f'list directory {path} with NLST', ftp.nlst, restore_path=path):
                 name = PurePosixPath(listed).name
+                child = PurePosixPath(path).joinpath(name).as_posix()
                 try:
-                    # This probe intentionally treats a 550 as a file; retrying a
-                    # normal file-vs-directory distinction would add noise and delay.
-                    ftp.cwd(name)
-                except ftplib.error_perm:
-                    try:
-                        retry(f'check file entry {name}', lambda: ftp.size(name))
-                    except Exception as error:
-                        raise _operation_error(f'distinguish NLST entry {name}', error) from error
+                    ftp.cwd(child)
+                except ftplib.error_perm as probe_error:
+                    if str(probe_error)[:3] != '550':
+                        raise _operation_error(f'probe directory {child}', probe_error) from probe_error
+                    retry(f'check file entry {child}', lambda: ftp.size(child), restore_path=path)
                     entries.append((name, {'type': 'file'}))
                 else:
                     cwd(path)
@@ -125,13 +136,23 @@ def remote_files(ftp, root, hash_names, reconnect=None, log=print):
                 cwd(path)
             elif kind == 'file':
                 if relative in hash_names:
-                    hashed[relative] = hash_file(name, relative, checked + 1)
+                    hashed[relative] = hash_file(path, name, relative, checked + 1)
                 else:
                     unhashed.append(relative)
 
-    walk(root)
-    log(f'FTPS verification complete: {checked}/{total} managed files hashed')
-    return hashed, unhashed
+    try:
+        walk(root)
+        log(f'FTPS verification complete: {checked}/{total} managed files hashed')
+        return hashed, unhashed
+    finally:
+        for replacement in replacement_ftps:
+            try:
+                replacement.quit()
+            except Exception:
+                try:
+                    replacement.close()
+                except Exception:
+                    pass
 
 
 def classify(name, package):

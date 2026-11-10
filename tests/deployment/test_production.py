@@ -69,7 +69,7 @@ class NlstFTP:
         return names
 
     def size(self, name):
-        candidate = self.path.rstrip('/') + '/' + name
+        candidate = name if name.startswith('/') else self.path.rstrip('/') + '/' + name
         if candidate not in self.files:
             raise ftplib.error_perm('550 no size')
         return len(self.files[candidate])
@@ -300,6 +300,43 @@ class ProductionDeploymentTests(unittest.TestCase):
             def close(self): pass
         with self.assertRaisesRegex(RuntimeError, 'read-only hash of managed.dll'):
             module.remote_files(AlwaysTimeout(), '/root', {'managed.dll'}, reconnect=lambda: AlwaysTimeout(), log=lambda _: None)
+
+    def test_nlst_nested_paths_remain_absolute_across_hash_reconnect(self):
+        module = baseline_module()
+        class NestedFTP:
+            def __init__(self, fail_hash=False):
+                self.path = '/root'
+                self.fail_hash = fail_hash
+                self.cwd_calls = []
+            def cwd(self, path):
+                if not path.startswith('/'):
+                    raise ftplib.error_perm('550 relative path rejected')
+                if path not in {'/root', '/root/runtimes', '/root/runtimes/linux'}:
+                    raise ftplib.error_perm('550 missing directory')
+                self.path = path
+                self.cwd_calls.append(path)
+            def mlsd(self):
+                raise ftplib.error_perm('500 MLSD unsupported')
+            def nlst(self):
+                return {'/root': ['runtimes'], '/root/runtimes': ['linux'],
+                        '/root/runtimes/linux': ['native.dll']}[self.path]
+            def size(self, name):
+                if name == '/root/runtimes/linux/native.dll': return 3
+                raise ftplib.error_perm('550 missing file')
+            def retrbinary(self, command, callback):
+                self.cwd_calls.append(f'{self.path}:{command}')
+                if self.fail_hash:
+                    self.fail_hash = False
+                    raise TimeoutError('interrupted transfer')
+                callback(b'abc')
+            def close(self): pass
+        first = NestedFTP(True)
+        replacement = NestedFTP(False)
+        hashed, _ = module.remote_files(first, '/root', {'runtimes/linux/native.dll'},
+                                         reconnect=lambda: replacement, log=lambda _: None)
+        self.assertEqual(set(hashed), {'runtimes/linux/native.dll'})
+        self.assertNotIn('/root/runtimes/runtimes', replacement.cwd_calls)
+        self.assertIn('/root/runtimes/linux', replacement.cwd_calls)
 
     def test_bootstrap_rejects_confirmation_only_backup_reference(self):
         module = baseline_module()
