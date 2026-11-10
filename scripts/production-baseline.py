@@ -12,12 +12,15 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import ssl
+import time
 
 APPLICATION = 'pos.loveanise.co.uk'
 MANIFEST = '.anise-pos-production-deployment.json'
 PENDING = MANIFEST + '.pending'
 PREVIOUS = MANIFEST + '.previous'
 MAINTENANCE = 'app_offline.htm'
+FTP_TIMEOUT = 60
+FTP_RETRIES = 3
 
 
 def config():
@@ -42,30 +45,75 @@ def package_names(package):
     return rows
 
 
-def remote_files(ftp, root, hash_names):
+def _operation_error(operation, error):
+    return RuntimeError(f'Production FTPS read-only operation failed: {operation}: {error}')
+
+
+def remote_files(ftp, root, hash_names, reconnect=None, log=print):
     hashed = {}
     unhashed = []
+    checked = 0
+    total = len(hash_names)
+
+    def retry(operation, action, restore=None):
+        nonlocal ftp
+        last_error = None
+        for attempt in range(1, FTP_RETRIES + 1):
+            try:
+                return action()
+            except (OSError, EOFError, TimeoutError, ftplib.Error) as error:
+                last_error = error
+                if attempt == FTP_RETRIES or reconnect is None:
+                    raise _operation_error(operation, error) from error
+                log(f'FTPS retry {attempt}/{FTP_RETRIES - 1}: {operation}')
+                try:
+                    ftp.close()
+                except Exception:
+                    pass
+                time.sleep(min(attempt, 2))
+                ftp = reconnect()
+                if restore:
+                    restore(ftp)
+        raise _operation_error(operation, last_error)
+
+    def cwd(path):
+        retry(f'change directory to {path}', lambda: ftp.cwd(path))
+
+    def hash_file(path, relative, index):
+        nonlocal checked
+        log(f'Verifying managed file {index}/{total}: {relative}')
+        def read():
+            digest = hashlib.sha256()
+            # A new digest is created for every attempt: partial transfers are discarded.
+            # The default block size is compatible with Winserve's FTPS data channel.
+            ftp.retrbinary('RETR ' + PurePosixPath(path).name, digest.update)
+            return digest.hexdigest()
+        result = retry(f'read-only hash of {relative}', read, lambda connection: connection.cwd(str(PurePosixPath(path).parent)))
+        checked += 1
+        return result
 
     def walk(path):
-        ftp.cwd(path)
+        cwd(path)
         try:
-            entries = list(ftp.mlsd())
-        except ftplib.error_perm as error:
-            if str(error)[:3] not in {'500', '502', '504'}:
-                raise RuntimeError('Production directory listing failed') from error
+            entries = retry(f'list directory {path}', lambda: list(ftp.mlsd()))
+        except RuntimeError as error:
+            if '500' not in str(error) and '502' not in str(error) and '504' not in str(error):
+                raise
             entries = []
-            for listed in ftp.nlst():
+            for listed in retry(f'list directory {path} with NLST', ftp.nlst):
                 name = PurePosixPath(listed).name
                 try:
+                    # This probe intentionally treats a 550 as a file; retrying a
+                    # normal file-vs-directory distinction would add noise and delay.
                     ftp.cwd(name)
                 except ftplib.error_perm:
                     try:
-                        ftp.size(name)
+                        retry(f'check file entry {name}', lambda: ftp.size(name))
                     except Exception as error:
-                        raise RuntimeError('Could not distinguish an NLST entry as file or directory') from error
+                        raise _operation_error(f'distinguish NLST entry {name}', error) from error
                     entries.append((name, {'type': 'file'}))
                 else:
-                    ftp.cwd(path)
+                    cwd(path)
                     entries.append((name, {'type': 'dir'}))
         for name, facts in entries:
             if name in {'.', '..'}:
@@ -74,16 +122,15 @@ def remote_files(ftp, root, hash_names):
             kind = facts.get('type', 'file')
             if kind == 'dir':
                 walk(PurePosixPath(path).joinpath(name).as_posix())
-                ftp.cwd(path)
+                cwd(path)
             elif kind == 'file':
                 if relative in hash_names:
-                    digest = hashlib.sha256()
-                    ftp.retrbinary('RETR ' + name, digest.update)
-                    hashed[relative] = digest.hexdigest()
+                    hashed[relative] = hash_file(name, relative, checked + 1)
                 else:
                     unhashed.append(relative)
 
     walk(root)
+    log(f'FTPS verification complete: {checked}/{total} managed files hashed')
     return hashed, unhashed
 
 
@@ -98,9 +145,9 @@ def classify(name, package):
     return 'unrelated or unexpected file'
 
 
-def inventory(ftp, root, package):
+def inventory(ftp, root, package, reconnect=None):
     managed_package = {name for name in package if classify(name, package) == 'managed application file'}
-    remote, unhashed = remote_files(ftp, root, managed_package | {'AnisePOS.Api.dll'})
+    remote, unhashed = remote_files(ftp, root, managed_package | {'AnisePOS.Api.dll'}, reconnect=reconnect)
     if 'AnisePOS.Api.dll' not in remote or 'web.config' not in unhashed:
         raise RuntimeError('Remote root does not contain the expected POS application identity files')
     managed = {name: remote[name] for name in package if name in remote}
@@ -119,16 +166,28 @@ def inventory(ftp, root, package):
     }
 
 
-@contextmanager
-def connect():
-    values = config()
-    ftp = ftplib.FTP_TLS(context=ssl.create_default_context(), timeout=60)
+def _open_ftp(values):
+    ftp = ftplib.FTP_TLS(context=ssl.create_default_context(), timeout=FTP_TIMEOUT)
     try:
         ftp.connect(values['LIVE_FTPS_HOST'], 21)
         ftp.auth()
         ftp.login(values['LIVE_FTPS_USERNAME'], values['LIVE_FTPS_PASSWORD'])
         ftp.prot_p()
+        ftp.set_pasv(True)
         ftp.cwd(values['PROD_FTPS_ROOT'])
+        return ftp
+    except Exception:
+        try:
+            ftp.close()
+        finally:
+            raise
+
+
+@contextmanager
+def connect():
+    values = config()
+    ftp = _open_ftp(values)
+    try:
         yield ftp
     finally:
         try:
@@ -140,7 +199,8 @@ def connect():
 def inspect(args):
     package = package_names(Path(args.package))
     with connect() as ftp:
-        report = inventory(ftp, os.environ['PROD_FTPS_ROOT'], package)
+        report = inventory(ftp, os.environ['PROD_FTPS_ROOT'], package,
+                           reconnect=lambda: _open_ftp(config()))
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
     (output / 'production-inventory.json').write_text(json.dumps(report, indent=2, sort_keys=True) + '\n')
@@ -167,9 +227,16 @@ def inspect(args):
 def bootstrap(args):
     if os.environ.get('PROD_BASELINE_BACKUP_VERIFIED', '').lower() != 'true':
         raise SystemExit('Verified application and SQL backup confirmation is required')
+    backup_references = {}
     for name in ('PROD_BASELINE_APP_BACKUP_REFERENCE', 'PROD_BASELINE_SQL_BACKUP_REFERENCE'):
         if not os.environ.get(name):
             raise SystemExit('Missing required backup reference: ' + name)
+        reference = os.environ[name].strip()
+        if reference.lower() in {'true', 'false', 'verified', 'confirmed', 'yes'}:
+            raise SystemExit(f'Backup reference {name} is only a confirmation flag, not an auditable backup identity')
+        backup_references[name] = reference
+    if backup_references['PROD_BASELINE_APP_BACKUP_REFERENCE'] == backup_references['PROD_BASELINE_SQL_BACKUP_REFERENCE']:
+        raise SystemExit('Application and SQL backup references must identify distinct backups')
     if os.environ.get('PROD_BASELINE_OWNER_CONFIRMATION') != 'ESTABLISH PRODUCTION BASELINE':
         raise SystemExit('Owner confirmation is required to publish the production baseline')
     report = json.loads(Path(args.inventory).read_text())
@@ -177,7 +244,11 @@ def bootstrap(args):
         raise SystemExit('Inspection report is missing verified production identity or managed hashes')
     with connect() as ftp:
         root = os.environ['PROD_FTPS_ROOT']
-        first, unhashed = remote_files(ftp, root, set(json.loads(Path(args.inventory).read_text())['managed_remote_hashes']) | {'AnisePOS.Api.dll'})
+        first, unhashed = remote_files(
+            ftp, root,
+            set(json.loads(Path(args.inventory).read_text())['managed_remote_hashes']) | {'AnisePOS.Api.dll'},
+            reconnect=lambda: _open_ftp(config()),
+        )
         names = set(first) | set(unhashed)
         if MANIFEST in names or PENDING in names or PREVIOUS in names or MAINTENANCE in names:
             raise SystemExit('Production baseline publication refused: manifest or interrupted-deployment marker exists')
@@ -190,8 +261,8 @@ def bootstrap(args):
             'environment': 'production',
             'application': APPLICATION,
             'backup_references': {
-                'application': os.environ['PROD_BASELINE_APP_BACKUP_REFERENCE'],
-                'sql': os.environ['PROD_BASELINE_SQL_BACKUP_REFERENCE'],
+                'application': backup_references['PROD_BASELINE_APP_BACKUP_REFERENCE'],
+                'sql': backup_references['PROD_BASELINE_SQL_BACKUP_REFERENCE'],
             },
             'files': expected,
         }
