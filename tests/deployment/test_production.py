@@ -16,6 +16,7 @@ SCRIPT = ROOT / 'scripts/production-deploy.py'
 UPLOADER = ROOT / 'scripts/upload-staging.py'
 DIAGNOSTIC = ROOT / 'scripts/production-ftps-diagnostic.py'
 BASELINE = ROOT / 'scripts/production-baseline.py'
+MARKER_DIAGNOSTIC = ROOT / 'scripts/production-baseline-marker-diagnostic.py'
 WORKFLOW = ROOT / '.github/workflows/production-release.yml'
 
 
@@ -29,6 +30,13 @@ def production_uploader_module():
 
 def baseline_module():
     spec = importlib.util.spec_from_file_location('production_baseline', BASELINE)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def marker_diagnostic_module():
+    spec = importlib.util.spec_from_file_location('production_baseline_marker_diagnostic', MARKER_DIAGNOSTIC)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -463,6 +471,34 @@ class ProductionDeploymentTests(unittest.TestCase):
                 fake.mlsd.return_value = [(marker, {'type': 'file'})]
                 with self.assertRaisesRegex(SystemExit, marker):
                     module.diagnose_root(fake, '/root')
+
+    def test_standalone_marker_diagnostic_reports_each_marker_and_clean_root(self):
+        module = marker_diagnostic_module()
+        class RootFTP:
+            def __init__(self, names): self.names = names
+            def cwd(self, path): self.path = path
+            def mlsd(self): return [(name, {'type': 'file'}) for name in self.names]
+            def retrbinary(self, command, callback):
+                callback(("{\"version\":1,\"environment\":\"production\",\"application\":\"pos.loveanise.co.uk\","
+                          "\"files\":{\"x\":\"" + "a" * 64 + "\"}}").encode())
+        for marker in module.MARKERS:
+            state = module.marker_state(RootFTP([marker]), '/root')
+            self.assertEqual(state['present'], (marker,))
+        self.assertEqual(module.marker_state(RootFTP([]), '/root')['present'], ())
+
+    def test_standalone_marker_diagnostic_validates_manifest_identity_and_health(self):
+        module = marker_diagnostic_module()
+        payload = ('{"version":1,"environment":"production","application":"pos.loveanise.co.uk",'
+                   '"files":{"AnisePOS.Api.dll":"' + 'a' * 64 + '"}}').encode()
+        fake = mock.Mock()
+        fake.mlsd.return_value = [(module.MANIFEST, {'type': 'file'})]
+        fake.retrbinary.side_effect = lambda command, callback: callback(payload)
+        state = module.marker_state(fake, '/root')
+        self.assertTrue(state['baseline'].startswith('valid production baseline'))
+        response = mock.Mock(status=200)
+        response.__enter__ = mock.Mock(return_value=response)
+        response.__exit__ = mock.Mock(return_value=False)
+        self.assertTrue(module.check_health(lambda *args, **kwargs: response))
 
     @staticmethod
     def _connection(ftp):
