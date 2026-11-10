@@ -13,12 +13,14 @@ import os
 from pathlib import Path, PurePosixPath
 import ssl
 import time
+from urllib.request import urlopen
 
 APPLICATION = 'pos.loveanise.co.uk'
 MANIFEST = '.anise-pos-production-deployment.json'
 PENDING = MANIFEST + '.pending'
 PREVIOUS = MANIFEST + '.previous'
 MAINTENANCE = 'app_offline.htm'
+PROTECTED_MARKERS = (MANIFEST, PENDING, PREVIOUS, MAINTENANCE)
 FTP_TIMEOUT = 60
 FTP_RETRIES = 3
 
@@ -186,6 +188,54 @@ def inventory(ftp, root, package, reconnect=None):
     }
 
 
+def read_root_markers(ftp, root):
+    """Return only protected marker names found directly in the production root."""
+    ftp.cwd(root)
+    try:
+        entries = list(ftp.mlsd())
+        names = {PurePosixPath(name).name for name, _ in entries}
+    except ftplib.error_perm as error:
+        if str(error)[:3] not in {'500', '502', '504'}:
+            raise _operation_error(f'list production root markers in {root}', error) from error
+        names = {PurePosixPath(name).name for name in ftp.nlst()}
+    return tuple(name for name in PROTECTED_MARKERS if name in names)
+
+
+def read_existing_manifest(ftp, root):
+    data = io.BytesIO()
+    ftp.cwd(root)
+    ftp.retrbinary('RETR ' + MANIFEST, data.write)
+    try:
+        payload = json.loads(data.getvalue().decode('utf-8'))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise SystemExit('Existing production baseline manifest is not valid UTF-8 JSON') from error
+    if (payload.get('version') != 1 or payload.get('environment') != 'production' or
+            payload.get('application') != APPLICATION or not isinstance(payload.get('files'), dict) or
+            not payload['files'] or any(not isinstance(name, str) or not isinstance(digest, str)
+                                        or len(digest) != 64 for name, digest in payload['files'].items())):
+        raise SystemExit('Existing production baseline manifest has invalid production identity or format')
+    return payload
+
+
+def check_live_health():
+    with urlopen('https://' + APPLICATION + '/health', timeout=20) as response:
+        if response.status != 200:
+            raise RuntimeError(f'Live POS health check returned HTTP {response.status}')
+    print('Live POS health check passed (read-only)')
+
+
+def diagnose_root(ftp, root):
+    markers = read_root_markers(ftp, root)
+    print('Production root markers: ' + (', '.join(markers) if markers else 'none'))
+    if MANIFEST in markers:
+        read_existing_manifest(ftp, root)
+        raise SystemExit('Existing production baseline manifest is valid; no replacement will be attempted')
+    recovery = [name for name in markers if name in {PENDING, PREVIOUS, MAINTENANCE}]
+    if recovery:
+        raise SystemExit('Production baseline recovery investigation required for: ' + ', '.join(recovery))
+    return markers
+
+
 def _open_ftp(values):
     ftp = ftplib.FTP_TLS(context=ssl.create_default_context(), timeout=FTP_TIMEOUT)
     try:
@@ -264,14 +314,14 @@ def bootstrap(args):
         raise SystemExit('Inspection report is missing verified production identity or managed hashes')
     with connect() as ftp:
         root = os.environ['PROD_FTPS_ROOT']
+        check_live_health()
+        diagnose_root(ftp, root)
         first, unhashed = remote_files(
             ftp, root,
             set(json.loads(Path(args.inventory).read_text())['managed_remote_hashes']) | {'AnisePOS.Api.dll'},
             reconnect=lambda: _open_ftp(config()),
         )
         names = set(first) | set(unhashed)
-        if MANIFEST in names or PENDING in names or PREVIOUS in names or MAINTENANCE in names:
-            raise SystemExit('Production baseline publication refused: manifest or interrupted-deployment marker exists')
         expected = report['managed_remote_hashes']
         actual = {name: first.get(name) for name in expected}
         if actual != expected:

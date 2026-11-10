@@ -250,7 +250,7 @@ class ProductionDeploymentTests(unittest.TestCase):
         baseline = BASELINE.read_text()
         self.assertIn('expected POS application identity files', baseline)
         self.assertIn('remote hashes changed since inspection', baseline)
-        self.assertIn("if MANIFEST in names or PENDING in names", baseline)
+        self.assertIn('PROTECTED_MARKERS', baseline)
         self.assertIn("ftp.rename(PENDING, MANIFEST)", baseline)
         self.assertIn("names_after", baseline)
         self.assertIn('hashlib.sha256()', baseline)
@@ -420,15 +420,49 @@ class ProductionDeploymentTests(unittest.TestCase):
                 'PROD_BASELINE_OWNER_CONFIRMATION': 'ESTABLISH PRODUCTION BASELINE',
             }
             with mock.patch.dict(os.environ, env), mock.patch.object(module, 'connect', self._connection(fake)), \
-                    mock.patch.object(module, 'remote_files', return_value=({'AnisePOS.Api.dll': 'remote-hash'}, ['web.config'])):
+                    mock.patch.object(module, 'remote_files', return_value=({'AnisePOS.Api.dll': 'remote-hash'}, ['web.config'])), \
+                    mock.patch.object(module, 'check_live_health'), mock.patch.object(module, 'diagnose_root', return_value=()):
                 module.bootstrap(SimpleNamespace(inventory=str(inventory)))
             fake.rename.assert_called_once_with(module.PENDING, module.MANIFEST)
             fake.storbinary.assert_called_once()
             with mock.patch.dict(os.environ, env), mock.patch.object(module, 'connect', self._connection(fake)), \
-                    mock.patch.object(module, 'remote_files', return_value=({'AnisePOS.Api.dll': 'changed-hash'}, ['web.config'])):
+                    mock.patch.object(module, 'remote_files', return_value=({'AnisePOS.Api.dll': 'changed-hash'}, ['web.config'])), \
+                    mock.patch.object(module, 'check_live_health'), mock.patch.object(module, 'diagnose_root', return_value=()):
                 with self.assertRaisesRegex(SystemExit, 'remote hashes changed'):
                     module.bootstrap(SimpleNamespace(inventory=str(inventory)))
             self.assertEqual(fake.storbinary.call_count, 1)
+
+    def test_marker_diagnostic_reports_clean_root_and_each_protected_marker(self):
+        module = baseline_module()
+        class MarkerFTP:
+            def __init__(self, names): self.names = names
+            def cwd(self, path): self.path = path
+            def mlsd(self): return [(name, {'type': 'file'}) for name in self.names]
+        for marker in module.PROTECTED_MARKERS:
+            with self.subTest(marker=marker):
+                output = []
+                result = module.read_root_markers(MarkerFTP([marker]), '/root')
+                self.assertEqual(result, (marker,))
+        self.assertEqual(module.read_root_markers(MarkerFTP([]), '/root'), ())
+
+    def test_marker_diagnostic_validates_manifest_and_stops_without_hashing(self):
+        module = baseline_module()
+        fake = mock.Mock()
+        fake.mlsd.return_value = [(module.MANIFEST, {'type': 'file'})]
+        payload = b'{"version":1,"environment":"production","application":"pos.loveanise.co.uk","files":{"x":"' + b'a' * 64 + b'"}}'
+        fake.retrbinary.side_effect = lambda command, callback: callback(payload)
+        with self.assertRaisesRegex(SystemExit, 'valid; no replacement'):
+            module.diagnose_root(fake, '/root')
+        fake.retrbinary.assert_called_once_with('RETR ' + module.MANIFEST, mock.ANY)
+
+    def test_marker_diagnostic_requires_recovery_for_pending_previous_or_maintenance(self):
+        module = baseline_module()
+        for marker in (module.PENDING, module.PREVIOUS, module.MAINTENANCE):
+            with self.subTest(marker=marker):
+                fake = mock.Mock()
+                fake.mlsd.return_value = [(marker, {'type': 'file'})]
+                with self.assertRaisesRegex(SystemExit, marker):
+                    module.diagnose_root(fake, '/root')
 
     @staticmethod
     def _connection(ftp):
