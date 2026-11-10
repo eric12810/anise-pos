@@ -16,6 +16,8 @@ SCRIPT = ROOT / 'scripts/production-deploy.py'
 UPLOADER = ROOT / 'scripts/upload-staging.py'
 DIAGNOSTIC = ROOT / 'scripts/production-ftps-diagnostic.py'
 BASELINE = ROOT / 'scripts/production-baseline.py'
+MARKER_DIAGNOSTIC = ROOT / 'scripts/production-baseline-marker-diagnostic.py'
+RECOVERY = ROOT / 'scripts/production-baseline-recover.py'
 WORKFLOW = ROOT / '.github/workflows/production-release.yml'
 
 
@@ -29,6 +31,13 @@ def production_uploader_module():
 
 def baseline_module():
     spec = importlib.util.spec_from_file_location('production_baseline', BASELINE)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def marker_diagnostic_module():
+    spec = importlib.util.spec_from_file_location('production_baseline_marker_diagnostic', MARKER_DIAGNOSTIC)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -250,7 +259,7 @@ class ProductionDeploymentTests(unittest.TestCase):
         baseline = BASELINE.read_text()
         self.assertIn('expected POS application identity files', baseline)
         self.assertIn('remote hashes changed since inspection', baseline)
-        self.assertIn("if MANIFEST in names or PENDING in names", baseline)
+        self.assertIn('PROTECTED_MARKERS', baseline)
         self.assertIn("ftp.rename(PENDING, MANIFEST)", baseline)
         self.assertIn("names_after", baseline)
         self.assertIn('hashlib.sha256()', baseline)
@@ -420,15 +429,108 @@ class ProductionDeploymentTests(unittest.TestCase):
                 'PROD_BASELINE_OWNER_CONFIRMATION': 'ESTABLISH PRODUCTION BASELINE',
             }
             with mock.patch.dict(os.environ, env), mock.patch.object(module, 'connect', self._connection(fake)), \
-                    mock.patch.object(module, 'remote_files', return_value=({'AnisePOS.Api.dll': 'remote-hash'}, ['web.config'])):
+                    mock.patch.object(module, 'remote_files', return_value=({'AnisePOS.Api.dll': 'remote-hash'}, ['web.config'])), \
+                    mock.patch.object(module, 'check_live_health'), mock.patch.object(module, 'diagnose_root', return_value=()):
                 module.bootstrap(SimpleNamespace(inventory=str(inventory)))
             fake.rename.assert_called_once_with(module.PENDING, module.MANIFEST)
             fake.storbinary.assert_called_once()
             with mock.patch.dict(os.environ, env), mock.patch.object(module, 'connect', self._connection(fake)), \
-                    mock.patch.object(module, 'remote_files', return_value=({'AnisePOS.Api.dll': 'changed-hash'}, ['web.config'])):
+                    mock.patch.object(module, 'remote_files', return_value=({'AnisePOS.Api.dll': 'changed-hash'}, ['web.config'])), \
+                    mock.patch.object(module, 'check_live_health'), mock.patch.object(module, 'diagnose_root', return_value=()):
                 with self.assertRaisesRegex(SystemExit, 'remote hashes changed'):
                     module.bootstrap(SimpleNamespace(inventory=str(inventory)))
             self.assertEqual(fake.storbinary.call_count, 1)
+
+    def test_marker_diagnostic_reports_clean_root_and_each_protected_marker(self):
+        module = baseline_module()
+        class MarkerFTP:
+            def __init__(self, names): self.names = names
+            def cwd(self, path): self.path = path
+            def mlsd(self): return [(name, {'type': 'file'}) for name in self.names]
+        for marker in module.PROTECTED_MARKERS:
+            with self.subTest(marker=marker):
+                output = []
+                result = module.read_root_markers(MarkerFTP([marker]), '/root')
+                self.assertEqual(result, (marker,))
+        self.assertEqual(module.read_root_markers(MarkerFTP([]), '/root'), ())
+
+    def test_marker_diagnostic_validates_manifest_and_stops_without_hashing(self):
+        module = baseline_module()
+        fake = mock.Mock()
+        fake.mlsd.return_value = [(module.MANIFEST, {'type': 'file'})]
+        payload = b'{"version":1,"environment":"production","application":"pos.loveanise.co.uk","files":{"x":"' + b'a' * 64 + b'"}}'
+        fake.retrbinary.side_effect = lambda command, callback: callback(payload)
+        with self.assertRaisesRegex(SystemExit, 'valid; no replacement'):
+            module.diagnose_root(fake, '/root')
+        fake.retrbinary.assert_called_once_with('RETR ' + module.MANIFEST, mock.ANY)
+
+    def test_marker_diagnostic_requires_recovery_for_pending_previous_or_maintenance(self):
+        module = baseline_module()
+        for marker in (module.PENDING, module.PREVIOUS, module.MAINTENANCE):
+            with self.subTest(marker=marker):
+                fake = mock.Mock()
+                fake.mlsd.return_value = [(marker, {'type': 'file'})]
+                with self.assertRaisesRegex(SystemExit, marker):
+                    module.diagnose_root(fake, '/root')
+
+    def test_standalone_marker_diagnostic_reports_each_marker_and_clean_root(self):
+        module = marker_diagnostic_module()
+        class RootFTP:
+            def __init__(self, names): self.names = names
+            def cwd(self, path): self.path = path
+            def mlsd(self): return [(name, {'type': 'file'}) for name in self.names]
+            def retrbinary(self, command, callback):
+                callback(("{\"version\":1,\"environment\":\"production\",\"application\":\"pos.loveanise.co.uk\","
+                          "\"files\":{\"x\":\"" + "a" * 64 + "\"}}").encode())
+        for marker in module.MARKERS:
+            state = module.marker_state(RootFTP([marker]), '/root')
+            self.assertEqual(state['present'], (marker,))
+        self.assertEqual(module.marker_state(RootFTP([]), '/root')['present'], ())
+
+    def test_standalone_marker_diagnostic_validates_manifest_identity_and_health(self):
+        module = marker_diagnostic_module()
+        payload = ('{"version":1,"environment":"production","application":"pos.loveanise.co.uk",'
+                   '"files":{"AnisePOS.Api.dll":"' + 'a' * 64 + '"}}').encode()
+        fake = mock.Mock()
+        fake.mlsd.return_value = [(module.MANIFEST, {'type': 'file'})]
+        fake.retrbinary.side_effect = lambda command, callback: callback(payload)
+        state = module.marker_state(fake, '/root')
+        self.assertTrue(state['baseline'].startswith('valid production baseline'))
+        response = mock.Mock(status=200)
+        response.__enter__ = mock.Mock(return_value=response)
+        response.__exit__ = mock.Mock(return_value=False)
+        self.assertTrue(module.check_health(lambda *args, **kwargs: response))
+
+    def test_standalone_marker_diagnostic_inspects_pending_manifest_without_writing(self):
+        module = marker_diagnostic_module()
+        payload = ('{"version":1,"environment":"production","application":"pos.loveanise.co.uk",'
+                   '"files":{"AnisePOS.Api.dll":"' + 'b' * 64 + '"}}').encode()
+        fake = mock.Mock()
+        fake.mlsd.return_value = [(module.PENDING, {'type': 'file'})]
+        fake.retrbinary.side_effect = lambda command, callback: callback(payload)
+        state = module.marker_state(fake, '/root')
+        self.assertTrue(state['pending']['valid'])
+        self.assertEqual(state['pending']['sha256'], __import__('hashlib').sha256(payload).hexdigest())
+        fake.storbinary.assert_not_called()
+        fake.rename.assert_not_called()
+        fake.delete.assert_not_called()
+
+    def test_recovery_command_requires_separate_owner_approval_before_connecting(self):
+        inventory = ROOT / 'tests/deployment/temporary-recovery-inventory.json'
+        inventory.write_text('{"application":"pos.loveanise.co.uk","managed_remote_hashes":{}}\n')
+        evidence = ROOT / 'tests/deployment/temporary-recovery-evidence.json'
+        try:
+            result = subprocess.run(
+                [sys.executable, str(RECOVERY), '--inventory', str(inventory), '--evidence', str(evidence), '--owner-approval', 'wrong'],
+                cwd=ROOT, capture_output=True, text=True, check=False,
+                env={**os.environ, 'PROD_BASELINE_RECOVERY_BACKUP_VERIFIED': 'true'},
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('separate owner approval', result.stderr)
+            self.assertNotIn('rename', result.stderr.lower())
+        finally:
+            inventory.unlink(missing_ok=True)
+            evidence.unlink(missing_ok=True)
 
     @staticmethod
     def _connection(ftp):
