@@ -19,6 +19,7 @@ BASELINE = ROOT / 'scripts/production-baseline.py'
 MARKER_DIAGNOSTIC = ROOT / 'scripts/production-baseline-marker-diagnostic.py'
 RECOVERY = ROOT / 'scripts/production-baseline-recover.py'
 WORKFLOW = ROOT / '.github/workflows/production-release.yml'
+RECOVERY_WORKFLOW = ROOT / '.github/workflows/production-baseline-recovery.yml'
 
 
 def production_uploader_module():
@@ -531,6 +532,15 @@ class ProductionDeploymentTests(unittest.TestCase):
         finally:
             inventory.unlink(missing_ok=True)
             evidence.unlink(missing_ok=True)
+
+    def test_recovery_workflow_is_manual_and_protected(self):
+        workflow = RECOVERY_WORKFLOW.read_text()
+        self.assertIn('workflow_dispatch:', workflow)
+        self.assertIn('environment: production', workflow)
+        self.assertIn('production-baseline-recover.py', workflow)
+        self.assertIn('PROD_BASELINE_RECOVERY_BACKUP_VERIFIED', workflow)
+        self.assertIn("FINALISE PRODUCTION BASELINE PENDING MANIFEST", workflow)
+        self.assertNotIn('on:\n  push:', workflow)
 
     @staticmethod
     def _connection(ftp):
