@@ -36,7 +36,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
-          persist-credentials: false
+          # The read-only checkout token is needed by the branch-head safety
+          # check below. It is not an FTPS credential and is never logged.
+          persist-credentials: true
       - name: Verify staging commit is current
         if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/staging')
         run: |
