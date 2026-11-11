@@ -13,11 +13,27 @@ import subprocess
 import tempfile
 from urllib.parse import quote
 
-HOST = os.environ.get('DEPLOY_FTPS_HOST', 'wsuk32.pronameserver.com')
-USER = os.environ.get('DEPLOY_FTPS_USERNAME', 'stageposftp')
-REMOTE_ROOT = os.environ.get('DEPLOY_FTPS_ROOT', '/stageposftp/wwwroot')
-MAINTENANCE = b'<html><body>Staging maintenance</body></html>'
-DEPLOYED_MANIFEST = '.anise-pos-staging-deployment.json'
+DEPLOYMENT_ENV = os.environ.get('DEPLOYMENT_ENV', 'staging').lower()
+if DEPLOYMENT_ENV not in {'staging', 'production'}:
+    raise ValueError('Unsupported FTPS deployment environment')
+
+if DEPLOYMENT_ENV == 'production':
+    HOST = os.environ.get('DEPLOY_FTPS_HOST', '')
+    USER = os.environ.get('DEPLOY_FTPS_USERNAME', '')
+    REMOTE_ROOT = os.environ.get('DEPLOY_FTPS_ROOT', '')
+    DEPLOYED_MANIFEST = '.anise-pos-production-deployment.json'
+    CONFIRMATION = os.environ.get('DEPLOY_CONFIRMATION_TEXT', 'DEPLOY production pos')
+    APPLICATION_ID = 'pos.loveanise.co.uk'
+    MAINTENANCE = b'<html><body>POS production maintenance</body></html>'
+else:
+    HOST = os.environ.get('DEPLOY_FTPS_HOST', 'wsuk32.pronameserver.com')
+    USER = os.environ.get('DEPLOY_FTPS_USERNAME', 'stageposftp')
+    REMOTE_ROOT = os.environ.get('DEPLOY_FTPS_ROOT', '/stageposftp/wwwroot')
+    DEPLOYED_MANIFEST = '.anise-pos-staging-deployment.json'
+    APPLICATION_ID = 'pos-staging.loveanise.co.uk'
+    MAINTENANCE = b'<html><body>Staging maintenance</body></html>'
+
+
 PENDING_MANIFEST = DEPLOYED_MANIFEST + '.pending'
 BACKUP_MANIFEST = DEPLOYED_MANIFEST + '.previous'
 MANIFEST_VERSION = 1
@@ -208,7 +224,26 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--deploy', action='store_true')
     args = parser.parse_args()
-    if (os.environ.get('DEPLOY_FTPS_HOST') or os.environ.get('STAGING_FTPS_HOST')) != HOST or (os.environ.get('DEPLOY_FTPS_USERNAME') or os.environ.get('STAGING_FTPS_USERNAME')) != USER:
+    if DEPLOYMENT_ENV == 'production':
+        missing = [name for name, value in {
+            'DEPLOY_FTPS_HOST': HOST,
+            'DEPLOY_FTPS_USERNAME': USER,
+            'DEPLOY_FTPS_PASSWORD': os.environ.get('DEPLOY_FTPS_PASSWORD', ''),
+            'DEPLOY_FTPS_ROOT': REMOTE_ROOT,
+        }.items() if not value]
+        if missing:
+            raise ValueError('Production FTPS configuration is missing: ' + ', '.join(missing))
+        if os.environ.get('STAGING_FTPS_HOST') and HOST == os.environ['STAGING_FTPS_HOST']:
+            raise ValueError('Production FTPS host matches the staging host')
+        if 'staging' in REMOTE_ROOT.lower():
+            raise ValueError('Production FTPS root is a staging directory')
+        password = os.environ['DEPLOY_FTPS_PASSWORD']
+    else:
+        password = os.environ.get('DEPLOY_FTPS_PASSWORD') or os.environ.get('STAGING_FTPS_PASSWORD')
+
+    if args.deploy and DEPLOYMENT_ENV == 'production' and os.environ.get('DEPLOY_CONFIRMATION') != CONFIRMATION:
+        raise ValueError('Explicit deployment confirmation is required')
+    if DEPLOYMENT_ENV == 'staging' and ((os.environ.get('DEPLOY_FTPS_HOST') or os.environ.get('STAGING_FTPS_HOST')) != HOST or (os.environ.get('DEPLOY_FTPS_USERNAME') or os.environ.get('STAGING_FTPS_USERNAME')) != USER):
         raise ValueError('Credentials must match the approved staging host and account')
     if not password:
         raise ValueError(('Production' if DEPLOYMENT_ENV == 'production' else 'Staging') + ' password secret is missing')
