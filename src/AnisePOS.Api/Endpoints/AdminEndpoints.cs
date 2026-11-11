@@ -37,14 +37,21 @@ public static class AdminEndpoints
             var ip = await db.DeliverySettings.AsNoTracking().Where(x => x.Id == 1).Select(x => x.PrinterIpAddress).SingleOrDefaultAsync(ct);
             return Results.Ok(new { ipAddress = ip ?? "192.168.1.234" });
         }).RequireAuthorization();
-        app.MapPut("/api/admin/printer-settings", async (PrinterSettingsRequest request, AniseDbContext db, IConfiguration config, CancellationToken ct) =>
+        app.MapPut("/api/admin/printer-settings", async (PrinterSettingsRequest request, AniseDbContext db, IConfiguration config, ILoggerFactory loggerFactory, CancellationToken ct) =>
         {
+            var logger = loggerFactory.CreateLogger("PrinterSettings");
             var input = request.IpAddress?.Trim();
             if (!PrinterAddressValidation.Validate(input, out var message))
                 return Results.BadRequest(new { message });
             var settings = await db.DeliverySettings.FindAsync(new object[] { 1 }, ct);
             if (settings is null) { settings = await DeliverySettingsForWebsite.Get(db, config, ct); settings.Id = 1; db.DeliverySettings.Add(settings); }
-            settings.PrinterIpAddress = input; await db.SaveChangesAsync(ct);
+            settings.PrinterIpAddress = input;
+            try { await db.SaveChangesAsync(ct); }
+            catch (DbUpdateException ex)
+            {
+                logger.LogError(ex, "Could not persist receipt printer address to DeliverySettings.");
+                return Results.Problem("The POS server could not store the printer address. Check the server log for the database error.", statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
             return Results.Ok(new { ipAddress = input });
         }).RequireAuthorization("ManageMenu");
         app.MapGet("/api/admin/delivery-settings", async (AniseDbContext db, IConfiguration config, CancellationToken ct) =>
