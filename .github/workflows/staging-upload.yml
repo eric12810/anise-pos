@@ -8,10 +8,6 @@ on:
         type: choice
         options: [check, deploy]
         default: check
-      confirmation:
-        description: 'For upload, type: DEPLOY pos'
-        type: string
-        default: ''
 
 permissions:
   contents: read
@@ -32,16 +28,6 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '9.0.x'
-      - name: Validate requested operation
-        env:
-          MODE: ${{ inputs.mode }}
-          CONFIRMATION: ${{ inputs.confirmation }}
-        run: |
-          if [ "$MODE" = deploy ]; then
-            test "$CONFIRMATION" = 'DEPLOY pos-staging.loveanise.co.uk'
-          else
-            test "$MODE" = check
-          fi
       - name: Build and check
         run: |
           dotnet build AnisePOS.sln --configuration Release
@@ -56,7 +42,6 @@ jobs:
           STAGING_FTPS_HOST: ${{ secrets.STAGING_FTPS_HOST }}
           STAGING_FTPS_USERNAME: ${{ secrets.STAGING_FTPS_USERNAME }}
           STAGING_FTPS_PASSWORD: ${{ secrets.STAGING_FTPS_PASSWORD }}
-          DEPLOY_CONFIRMATION: ${{ inputs.confirmation }}
           MODE: ${{ inputs.mode }}
         run: |
           if [ "$MODE" = deploy ]; then

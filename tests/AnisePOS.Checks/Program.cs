@@ -278,6 +278,20 @@ var mismatchHandler = new RefundHandler(testSessionUnrefunded.Replace("\"amount_
 if (await WebsiteStripeRefund.EnsureRefundedAsync(new HttpClient(mismatchHandler), "sk_test_example", "cs_test_123", paymentId, 6.50m, CancellationToken.None) != WebsiteStripeRefund.Result.Unconfirmed || mismatchHandler.PostCount != 0) throw new Exception("Incorrect amount was refunded.");
 Console.WriteLine("Passed automatic refund, retry, pending, failure and amount validation checks.");
 
+var printerAddresses = new Dictionary<string, bool>
+{
+    ["192.168.1.233"] = true,
+    ["10.0.0.50"] = true,
+    ["255.255.255.255"] = false,
+    ["192.168.1.999"] = false,
+    [""] = false,
+    ["http://192.168.1.233"] = false
+};
+foreach (var (address, expected) in printerAddresses)
+    if (PrinterAddressValidation.Validate(address, out _) != expected)
+        throw new Exception($"Printer address validation failed for '{address}'.");
+Console.WriteLine("Passed receipt printer IPv4 validation checks.");
+
 sealed class RefundHandler(params string[] responses) : HttpMessageHandler
 {
     private readonly Queue<string> _responses = new(responses);

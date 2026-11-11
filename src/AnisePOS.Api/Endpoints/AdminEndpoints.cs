@@ -40,11 +40,8 @@ public static class AdminEndpoints
         app.MapPut("/api/admin/printer-settings", async (PrinterSettingsRequest request, AniseDbContext db, IConfiguration config, CancellationToken ct) =>
         {
             var input = request.IpAddress?.Trim();
-            if (input is null || !System.Net.IPAddress.TryParse(input, out var parsed) || parsed.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork || parsed.ToString() != input)
-                return Results.BadRequest(new { message = "Enter a valid local IPv4 address, for example 192.168.1.234." });
-            var bytes = parsed.GetAddressBytes();
-            if (!(bytes[0] == 10 || (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31) || (bytes[0] == 192 && bytes[1] == 168)) || bytes[3] == 0 || bytes[3] == 255)
-                return Results.BadRequest(new { message = "Enter a private network IPv4 address." });
+            if (!PrinterAddressValidation.Validate(input, out var message))
+                return Results.BadRequest(new { message });
             var settings = await db.DeliverySettings.FindAsync(new object[] { 1 }, ct);
             if (settings is null) { settings = await DeliverySettingsForWebsite.Get(db, config, ct); settings.Id = 1; db.DeliverySettings.Add(settings); }
             settings.PrinterIpAddress = input; await db.SaveChangesAsync(ct);
@@ -155,6 +152,31 @@ public sealed record DeliverySector(string Sector, decimal Fee);
 public sealed record DeliveryRadiusBand(decimal RadiusMiles, decimal Fee);
 public sealed record OrderSoundRequest(string? Sound);
 public sealed record PrinterSettingsRequest(string? IpAddress);
+
+public static class PrinterAddressValidation
+{
+    public static bool Validate(string? input, out string message)
+    {
+        if (string.IsNullOrWhiteSpace(input) || !System.Net.IPAddress.TryParse(input, out var parsed) ||
+            parsed.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork || parsed.ToString() != input)
+        {
+            message = "Enter a valid IPv4 address, for example 192.168.1.234. Do not include http:// or a port.";
+            return false;
+        }
+
+        var bytes = parsed.GetAddressBytes();
+        if (!(bytes[0] == 10 || (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31) || (bytes[0] == 192 && bytes[1] == 168)) ||
+            bytes[3] == 0 || bytes[3] == 255)
+        {
+            message = "Enter a usable private-network IPv4 address (10.x.x.x, 172.16–31.x.x or 192.168.x.x).";
+            return false;
+        }
+
+        message = string.Empty;
+        return true;
+    }
+}
+
 public sealed record DeliverySettingsRequest(decimal RadiusMiles, decimal Fee, string? Mode, List<DeliverySector>? Sectors, List<DeliveryRadiusBand>? RadiusBands = null);
 
 public static class DeliverySettingsForWebsite

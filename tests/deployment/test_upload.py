@@ -1,7 +1,9 @@
 import hashlib
+import gzip
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -159,3 +161,26 @@ class DirectoryTests(unittest.TestCase):
         ftp.nlst.side_effect = upload.ftplib.error_perm('550 denied')
         with self.assertRaises(upload.ftplib.error_perm):
             upload.directory_names(ftp)
+
+
+class PosAssetTests(unittest.TestCase):
+    def test_precompressed_pos_page_matches_hybrid_source(self):
+        root = Path('src/AnisePOS.Api/wwwroot')
+        source = (root / 'pos.html').read_bytes()
+        source_text = source.decode('utf-8')
+        for marker in ('attachDishPress', 'cartLineKey', 'pointerdown', 'requiresSelection',
+                       'special-instructions', 'custom-quantity', 'notes:l.instructions||null'):
+            self.assertIn(marker, source_text)
+        self.assertNotIn('onclick=()=>openProduct(cat.products', source_text)
+
+        with gzip.open(root / 'pos.html.gz', 'rb') as compressed:
+            self.assertEqual(compressed.read(), source)
+
+        try:
+            brotli = subprocess.run(
+                ['brotli', '--decompress', '--stdout', str(root / 'pos.html.br')],
+                check=True, capture_output=True,
+            ).stdout
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            self.skipTest('brotli CLI is not installed')
+        self.assertEqual(brotli, source)

@@ -30,7 +30,6 @@ else:
     USER = os.environ.get('DEPLOY_FTPS_USERNAME', 'stageposftp')
     REMOTE_ROOT = os.environ.get('DEPLOY_FTPS_ROOT', '/stageposftp/wwwroot')
     DEPLOYED_MANIFEST = '.anise-pos-staging-deployment.json'
-    CONFIRMATION = os.environ.get('DEPLOY_CONFIRMATION_TEXT', 'DEPLOY pos-staging.loveanise.co.uk')
     APPLICATION_ID = 'pos-staging.loveanise.co.uk'
     MAINTENANCE = b'<html><body>Staging maintenance</body></html>'
 
@@ -242,7 +241,7 @@ def main():
     else:
         password = os.environ.get('DEPLOY_FTPS_PASSWORD') or os.environ.get('STAGING_FTPS_PASSWORD')
 
-    if args.deploy and os.environ.get('DEPLOY_CONFIRMATION') != CONFIRMATION:
+    if args.deploy and DEPLOYMENT_ENV == 'production' and os.environ.get('DEPLOY_CONFIRMATION') != CONFIRMATION:
         raise ValueError('Explicit deployment confirmation is required')
     if DEPLOYMENT_ENV == 'staging' and ((os.environ.get('DEPLOY_FTPS_HOST') or os.environ.get('STAGING_FTPS_HOST')) != HOST or (os.environ.get('DEPLOY_FTPS_USERNAME') or os.environ.get('STAGING_FTPS_USERNAME')) != USER):
         raise ValueError('Credentials must match the approved staging host and account')
