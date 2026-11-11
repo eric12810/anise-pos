@@ -7,6 +7,7 @@ import urllib.request
 repo = os.environ.get('GITHUB_REPOSITORY', '')
 token = os.environ.get('GITHUB_TOKEN', '')
 run_id = os.environ.get('STAGING_RUN_ID', '')
+release_sha = os.environ.get('GITHUB_SHA', '')
 
 if not repo or not token or not run_id.isdigit():
     raise SystemExit('A numeric staging Run ID and GitHub token are required')
@@ -25,10 +26,17 @@ def get(path):
         return json.load(response)
 
 
+def accepted_release_branch(run, expected_release_sha):
+    branch = run.get('head_branch')
+    if branch == 'staging':
+        return True
+    return branch == 'main' and bool(expected_release_sha) and run.get('head_sha') == expected_release_sha
+
+
 run = get('/actions/runs/' + run_id)
 if (
     run.get('repository', {}).get('full_name') != repo
-    or run.get('head_branch') != 'staging'
+    or not accepted_release_branch(run, release_sha)
     or run.get('status') != 'completed'
     or run.get('conclusion') != 'success'
 ):

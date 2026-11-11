@@ -1,4 +1,4 @@
-"""Explicit FTPS staging upload. Default mode only checks the connection."""
+"""Explicit FTPS upload with separate staging and production configurations."""
 import argparse
 import ftplib
 import hashlib
@@ -33,7 +33,10 @@ class StagingFTP(ftplib.FTP_TLS):
         remote = self.pwd().rstrip('/') + '/' + command[5:]
         if not remote.startswith(REMOTE_ROOT + '/'):
             raise ValueError('Upload outside staging wwwroot')
-        credentials = USER + ':' + (os.environ.get('DEPLOY_FTPS_PASSWORD') or os.environ.get('STAGING_FTPS_PASSWORD', ''))
+        password = os.environ.get('DEPLOY_FTPS_PASSWORD', '')
+        if DEPLOYMENT_ENV == 'staging':
+            password = password or os.environ.get('STAGING_FTPS_PASSWORD', '')
+        credentials = USER + ':' + password
         escaped = credentials.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r')
         with tempfile.NamedTemporaryFile() as payload:
             while chunk := stream.read(65536):
@@ -85,6 +88,8 @@ def directory_names(ftp):
 def read_deployed_manifest(ftp, root_names):
     """Read the last COMPLETE upload, never use a partial upload as a baseline."""
     if DEPLOYED_MANIFEST not in root_names:
+        if DEPLOYMENT_ENV == 'production':
+            raise RuntimeError('No verified production deployment baseline manifest; no files uploaded.')
         print('No prior deployment manifest: first run will upload the complete approved package.', flush=True)
         return None
     data = io.BytesIO()
@@ -94,6 +99,11 @@ def read_deployed_manifest(ftp, root_names):
         hashes = payload['files']
         if payload.get('version') != MANIFEST_VERSION or not isinstance(hashes, dict):
             raise ValueError('Unexpected manifest format')
+        if DEPLOYMENT_ENV == 'production' and (
+            payload.get('environment') != 'production'
+            or payload.get('application') != APPLICATION_ID
+        ):
+            raise ValueError('Production deployment baseline identity is not verified')
         for name, digest in hashes.items():
             if (not isinstance(name, str) or not SAFE_MANIFEST_PATH.fullmatch(name)
                     or PurePosixPath(name).is_absolute() or '..' in PurePosixPath(name).parts
@@ -107,7 +117,12 @@ def read_deployed_manifest(ftp, root_names):
 def save_deployed_manifest(ftp, files, had_previous):
     """Publish manifest only after every changed file is uploaded AND verified."""
     content = json.dumps(
-        {'version': MANIFEST_VERSION, 'files': files},
+        {
+            'version': MANIFEST_VERSION,
+            'environment': DEPLOYMENT_ENV,
+            'application': APPLICATION_ID,
+            'files': files,
+        },
         separators=(',', ':'), sort_keys=True
     ).encode('utf-8')
     ftp.cwd(REMOTE_ROOT)
@@ -140,6 +155,8 @@ def upload(ftp, files):
                 if not (name.lower() == 'web.config' and preserve_config)]
     desired = {name: digest for name, _, digest in approved}
     previous = read_deployed_manifest(ftp, names)
+    if DEPLOYMENT_ENV == 'production' and previous is None:
+        raise RuntimeError('No verified production deployment baseline; no files uploaded.')
     changed = [(name, path, digest) for name, path, digest in approved
                if previous is None or previous.get(name) != digest
                or (name.lower() == 'web.config' and 'web.config' not in lower_names)]
@@ -193,24 +210,23 @@ def main():
     args = parser.parse_args()
     if (os.environ.get('DEPLOY_FTPS_HOST') or os.environ.get('STAGING_FTPS_HOST')) != HOST or (os.environ.get('DEPLOY_FTPS_USERNAME') or os.environ.get('STAGING_FTPS_USERNAME')) != USER:
         raise ValueError('Credentials must match the approved staging host and account')
-    password = os.environ.get('DEPLOY_FTPS_PASSWORD') or os.environ.get('STAGING_FTPS_PASSWORD')
     if not password:
-        raise ValueError('Staging password secret is missing')
+        raise ValueError(('Production' if DEPLOYMENT_ENV == 'production' else 'Staging') + ' password secret is missing')
     files = package_files(Path('artifacts/staging'), Path('artifacts/staging-manifest.sha256'))
     with StagingFTP(context=ssl.create_default_context(), timeout=60) as ftp:
-        print('Step: connect to staging FTPS', flush=True)
+        print('Step: connect to configured FTPS', flush=True)
         ftp.connect(HOST, 21)
         print('Step: negotiate and verify TLS', flush=True)
         ftp.auth()
-        print('Step: authenticate staging account', flush=True)
+        print('Step: authenticate configured FTPS account', flush=True)
         ftp.login(USER, password)
         print('Step: encrypt data channel', flush=True)
         ftp.prot_p()
-        print('Step: select staging root', flush=True)
+        print('Step: select configured FTPS root', flush=True)
         ftp.cwd(REMOTE_ROOT)
-        print('Step: list staging root', flush=True)
+        print('Step: list configured FTPS root', flush=True)
         directory_names(ftp)
-        print('Verified TLS connection and encrypted directory listing at /stageposftp/wwwroot.')
+        print('Verified TLS connection and encrypted directory listing at configured FTPS root.')
         if args.deploy:
             upload(ftp, files)
         else:
@@ -226,5 +242,18 @@ if __name__ == '__main__':
         if isinstance(error, ftplib.Error) and code.isdigit():
             print('FTP response code: ' + code)
         # Server replies can include private information; avoid dumping them to logs.
-        print('Staging operation failed (' + type(error).__name__ + '). No automatic retry. If upload began, inspect app_offline.htm before restarting the site.')
+        detail = str(error)
+        # Keep diagnostics useful while never echoing credentials or endpoint settings.
+        for sensitive in {
+            os.environ.get('DEPLOY_FTPS_PASSWORD', ''),
+            os.environ.get('STAGING_FTPS_PASSWORD', ''),
+            HOST,
+            USER,
+            REMOTE_ROOT,
+        }:
+            if sensitive:
+                detail = detail.replace(sensitive, '[redacted]')
+        print(('Production' if DEPLOYMENT_ENV == 'production' else 'Staging') +
+              ' operation failed (' + type(error).__name__ + '): ' + detail +
+              '. No automatic retry; no files were intentionally changed after the last reported upload.')
         raise SystemExit(1)
