@@ -16,9 +16,6 @@ from urllib.parse import quote
 HOST = os.environ.get('DEPLOY_FTPS_HOST', 'wsuk32.pronameserver.com')
 USER = os.environ.get('DEPLOY_FTPS_USERNAME', 'stageposftp')
 REMOTE_ROOT = os.environ.get('DEPLOY_FTPS_ROOT', '/stageposftp/wwwroot')
-CONFIRMATION = os.environ.get('DEPLOY_CONFIRMATION_TEXT', 'DEPLOY pos-staging.loveanise.co.uk')
-
-
 MAINTENANCE = b'<html><body>Staging maintenance</body></html>'
 DEPLOYED_MANIFEST = '.anise-pos-staging-deployment.json'
 PENDING_MANIFEST = DEPLOYED_MANIFEST + '.pending'
@@ -194,8 +191,6 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--deploy', action='store_true')
     args = parser.parse_args()
-    if args.deploy and os.environ.get('DEPLOY_CONFIRMATION') != CONFIRMATION:
-        raise ValueError('Explicit deployment confirmation is required')
     if (os.environ.get('DEPLOY_FTPS_HOST') or os.environ.get('STAGING_FTPS_HOST')) != HOST or (os.environ.get('DEPLOY_FTPS_USERNAME') or os.environ.get('STAGING_FTPS_USERNAME')) != USER:
         raise ValueError('Credentials must match the approved staging host and account')
     password = os.environ.get('DEPLOY_FTPS_PASSWORD') or os.environ.get('STAGING_FTPS_PASSWORD')
