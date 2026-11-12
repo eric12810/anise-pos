@@ -186,6 +186,19 @@ if (!receipt.Subject.Contains("#42 received") || !receipt.Body.Contains("awaitin
     !receipt.Body.Contains("https://example.test/#secret") || !receipt.Body.Contains("expires 24 hours after ordering"))
     throw new Exception("Initial order receipt must include the private tracking link and its expiry.");
 
+var veganLine = new OrderLine { ProductName = "Vegetable Spring Rolls", VariantName = "Regular", Quantity = 2, IsVegan = true,
+    Notes = "Extra crispy", Modifiers = new List<OrderLineModifier> { new() { ModifierName = "Chilli sauce" } } };
+var chickenLine = new OrderLine { ProductName = "Chicken Chow Mein", VariantName = "Regular", Quantity = 1 };
+var kitchenTicket = AnisePOS.Api.Printing.ReceiptPrinter.Format(new Order { OrderNumber = 7, Lines = new List<OrderLine> { veganLine, chickenLine } }, true);
+var kitchenText = System.Text.Encoding.ASCII.GetString(kitchenTicket);
+if (!kitchenText.Contains("2 x [V] Vegetable Spring Rolls") || !kitchenText.Contains("1 x Chicken Chow Mein") ||
+    !kitchenText.Contains("  + Chilli sauce") || !kitchenText.Contains("  NOTE: Extra crispy") || kitchenText.Contains("? Vegetable"))
+    throw new Exception("Kitchen receipt vegan marker or line details failed.");
+var customerReceipt = System.Text.Encoding.ASCII.GetString(AnisePOS.Api.Printing.ReceiptPrinter.Format(new Order { OrderNumber = 8, Lines = new List<OrderLine> { veganLine } }, false));
+if (customerReceipt.Contains("[V]") || !customerReceipt.Contains("2 x Vegetable Spring Rolls"))
+    throw new Exception("Customer receipt vegan formatting changed unexpectedly.");
+Console.WriteLine("Passed vegan kitchen receipt and customer receipt compatibility checks.");
+
 var sectorSettings = new DeliverySettings { RadiusMiles = 1, Fee = 2m, SectorsJson = System.Text.Json.JsonSerializer.Serialize(new[] { new DeliverySector("NW1 8", 3.50m), new DeliverySector("N1 1", 0m) }) };
 var nearby = DeliverySettingsForWebsite.Decide(sectorSettings, "nw1 8et", 51.5434592, -0.1492259);
 var lowerSector = DeliverySettingsForWebsite.Decide(sectorSettings, "N1 1AA", 51.5434592, -0.1492259);

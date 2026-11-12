@@ -165,6 +165,8 @@ public sealed class OrderLine : Entity
     public Guid? ProductId { get; set; }
     public Guid? ProductVariantId { get; set; }
     public string ProductName { get; set; } = string.Empty;
+    // Receipt-time projection only; deliberately ignored by EF and not persisted.
+    public bool IsVegan { get; set; }
     public string VariantName { get; set; } = string.Empty;
     public decimal UnitPrice { get; set; }
     public int Quantity { get; set; }

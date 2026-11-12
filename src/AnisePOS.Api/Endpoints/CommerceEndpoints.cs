@@ -473,6 +473,10 @@ public static class CommerceEndpoints
                 .Include(o => o.Lines).ThenInclude(l => l.Modifiers)
                 .SingleOrDefaultAsync(o => o.OrderNumber == orderNumber, ct);
             if (order is null) return Results.NotFound();
+            var veganProductIds = await db.Products.AsNoTracking()
+                .Where(p => p.IsVegan && order.Lines.Where(l => l.ProductId.HasValue).Select(l => l.ProductId!.Value).Contains(p.Id))
+                .Select(p => p.Id).ToListAsync(ct);
+            foreach (var line in order.Lines) line.IsVegan = line.ProductId.HasValue && veganProductIds.Contains(line.ProductId.Value);
             try
             {
                 var printerHost = await db.DeliverySettings.AsNoTracking().Where(x => x.Id == 1).Select(x => x.PrinterIpAddress).SingleOrDefaultAsync(ct);
@@ -495,7 +499,7 @@ public static class CommerceEndpoints
                     o.Payments.OrderByDescending(p => p.CreatedAtUtc)
                         .Select(p => new ReceiptPaymentResponse(p.Method, p.Status)).FirstOrDefault(),
                     o.Lines.OrderBy(l => l.CreatedAtUtc).ThenBy(l => l.Id)
-                        .Select(l => new ReceiptLineResponse(l.ProductName, db.Products.Where(p => p.Id == l.ProductId).Select(p => p.ChineseName).FirstOrDefault(), l.VariantName, l.Quantity,
+                        .Select(l => new ReceiptLineResponse(l.ProductName, db.Products.Where(p => p.Id == l.ProductId).Select(p => p.ChineseName).FirstOrDefault(), db.Products.Where(p => p.Id == l.ProductId).Select(p => p.IsVegan).FirstOrDefault(), l.VariantName, l.Quantity,
                             l.UnitPrice, l.LineTotal, l.Notes, l.Modifiers.OrderBy(m => m.CreatedAtUtc)
                                 .Select(m => new ReceiptModifierResponse(m.ModifierName, m.PriceAdjustment)).ToList()))
                         .ToList()))
@@ -591,7 +595,7 @@ public sealed record ReceiptResponse(long OrderNumber, OrderType OrderType, Orde
     string? CustomFeeDescription, decimal CustomFee, decimal Total,
     ReceiptPaymentResponse? Payment, List<ReceiptLineResponse> Lines);
 public sealed record ReceiptPaymentResponse(PaymentMethod Method, PaymentStatus Status);
-public sealed record ReceiptLineResponse(string ProductName, string? ChineseName, string VariantName, int Quantity,
+public sealed record ReceiptLineResponse(string ProductName, string? ChineseName, bool IsVegan, string VariantName, int Quantity,
     decimal UnitPrice, decimal LineTotal, string? Notes, List<ReceiptModifierResponse> Modifiers);
 public sealed record ReceiptModifierResponse(string ModifierName, decimal PriceAdjustment);
 public sealed record PostcodeAddressResponse(string Address, string Postcode, string? Uprn, double? DistanceMiles);
