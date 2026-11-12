@@ -10,6 +10,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.RateLimiting;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
+using AnisePOS.Api.Diagnostics;
 
 var builder = WebApplication.CreateBuilder(args);
 var dataProtectionPath = Path.GetFullPath(Path.Combine(builder.Environment.ContentRootPath, "..", "data", "data-protection-keys"));
@@ -27,6 +28,7 @@ builder.Services.AddDbContext<AniseDbContext>(options =>
 builder.Services.AddCors(WebsiteCors.Configure);
 builder.Services.AddProblemDetails();
 builder.Services.AddHttpClient();
+builder.Services.AddSingleton<GoogleRouteDiagnosticState>();
 builder.Services.AddSingleton<GoogleMailTokenStore>();
 builder.Services.AddSingleton<GmailConfirmationSender>();
 builder.Services.AddHostedService<WebsiteConfirmationWorker>();
@@ -75,7 +77,8 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
 builder.Services.AddAuthorizationBuilder()
     .AddPolicy("ManageMenu", policy => policy.RequireRole("Owner", "Manager"))
     .AddPolicy("ViewReports", policy => policy.RequireRole("Owner", "Manager"))
-    .AddPolicy("ManageStaff", policy => policy.RequireRole("Owner"));
+    .AddPolicy("ManageStaff", policy => policy.RequireRole("Owner"))
+    .AddPolicy("GoogleRoutesDiagnosticOwner", policy => policy.RequireRole("Owner"));
 
 var app = builder.Build();
 
@@ -205,5 +208,6 @@ app.MapReportEndpoints();
 app.MapAdminEndpoints();
 app.MapPromotionEndpoints();
 app.MapStaffAuthEndpoints();
+app.MapInternalDiagnosticsEndpoints();
 
 app.Run();

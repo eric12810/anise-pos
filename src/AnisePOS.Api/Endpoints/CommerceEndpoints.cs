@@ -4,6 +4,7 @@ using AnisePOS.Api.Domain;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
 using System.Text.Json;
+using AnisePOS.Api.Diagnostics;
 
 namespace AnisePOS.Api.Endpoints;
 
@@ -416,7 +417,7 @@ public static class CommerceEndpoints
             Results.Ok(new { browserKey = configuration["GoogleMaps:BrowserKey"], configured = !string.IsNullOrWhiteSpace(configuration["GoogleMaps:BrowserKey"]) }));
 
         orders.MapPost("/driving-route", async (DrivingRouteRequest request, IConfiguration configuration,
-            IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, CancellationToken ct) =>
+            IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, GoogleRouteDiagnosticState routeState, CancellationToken ct) =>
         {
             var key = configuration["GoogleMaps:RoutesServerKey"];
             var destination = string.IsNullOrWhiteSpace(request.Address) ? request.Postcode?.Trim() : request.Address.Trim();
@@ -446,6 +447,8 @@ public static class CommerceEndpoints
                     loggerFactory.CreateLogger("AnisePOS.GoogleRoutes").LogWarning(
                         "Google Routes failed. HttpStatus={HttpStatus} GoogleStatus={GoogleStatus} Category={Category} SanitisedMessage={Message} MentionsOutboundIp={MentionsOutboundIp}",
                         (int)response.StatusCode, error.Status ?? "unknown", category, safeMessage, ipMentioned);
+                    routeState.Record(new GoogleRouteDiagnosticSnapshot(DateTimeOffset.UtcNow, (int)response.StatusCode,
+                        error.Status ?? "unknown", category, safeMessage, ipMentioned));
                     return Results.Problem(SafeGoogleRouteError(category, ipMentioned), statusCode: GoogleRouteHttpStatus(category));
                 }
                 using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
