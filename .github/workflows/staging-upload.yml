@@ -60,6 +60,8 @@ jobs:
           dotnet publish src/AnisePOS.Api/AnisePOS.Api.csproj
           --configuration Release --no-restore --no-self-contained
           -p:UseAppHost=false --output artifacts/staging
+      - name: Minify and compress publish assets
+        run: python3 scripts/build-web-assets.py artifacts/staging/wwwroot
       - name: Validate package and create manifest
         run: python3 scripts/review-staging-package.py
       - name: Store exact validated package
