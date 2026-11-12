@@ -45,5 +45,17 @@ direct.onclick=async()=>{
 };
 (async()=>{if(!/^\d+$/.test(orderNumber||'')){target.innerHTML='<p class="error">Invalid order number.</p>';return}try{const response=await fetch('/api/orders/'+orderNumber+'/receipt',{credentials:'same-origin',cache:'no-store'});if(response.status===401){location.replace('/staff-login.html?return=%2Forders.html');return}if(!response.ok)throw new Error();const order=await response.json();receiptOrder=order;direct.disabled=false;document.title=`Anise — ${type==='kitchen'?'Kitchen ticket':'Receipt'} #${order.orderNumber}`;target.classList.add(type);const customer=[order.customerName,order.customerPhone,order.orderType==='Delivery'?order.deliveryAddress:null].filter(Boolean).map(escapeHtml).join('\n');const lines=order.lines.map(line=>`<div class="line"><div class="line-head"><strong>${line.quantity} × ${escapeHtml(line.productName)}${line.variantName==='Regular'?'':' — '+escapeHtml(line.variantName)}</strong><span class="prices">${money(line.lineTotal)}</span></div>${line.chineseName?`<div class="mods" lang="zh">${escapeHtml(line.chineseName)}</div>`:''}${line.modifiers.length?`<div class="mods">${line.modifiers.map(m=>escapeHtml(m.modifierName)+(m.priceAdjustment?` (+${money(m.priceAdjustment)})`:'')).join('<br>')}</div>`:''}${line.notes?`<div class="mods">Note: ${escapeHtml(line.notes)}</div>`:''}</div>`).join('');target.innerHTML=`<h1>Anise</h1><h2>${type==='kitchen'?'KITCHEN · ':''}#${order.orderNumber}</h2><p class="meta">${escapeHtml(order.orderType)} · ${new Date(order.createdAtUtc).toLocaleString('en-GB')}</p><p class="meta">${escapeHtml(order.status)}</p>${customer?`<div class="customer">${customer}</div>`:''}${lines}${order.notes?`<div class="note"><strong>Note</strong><br>${escapeHtml(order.notes)}</div>`:''}<div class="totals"><div class="total-row"><span>Subtotal</span><span>${money(order.subtotal)}</span></div>${order.deliveryFee?`<div class="total-row"><span>Delivery</span><span>${money(order.deliveryFee)}</span></div>`:''}${order.customFee?`<div class="total-row"><span>${escapeHtml(order.customFeeDescription||'Additional charge')}</span><span>${money(order.customFee)}</span></div>`:''}${order.discountTotal?`<div class="total-row"><span>Discount</span><span>−${money(order.discountTotal)}</span></div>`:''}<div class="total-row grand"><span>Total</span><span>${money(order.total)}</span></div></div><div class="payment">${order.payment?escapeHtml(order.payment.method)+' · '+escapeHtml(order.payment.status):'Payment not recorded'}</div>`;}catch{target.innerHTML='<p class="error">Could not load this receipt.</p>'}})();
 </script>
+<script>
+function markVeganReceiptLines(){
+ if(!receiptOrder)return;
+ target.querySelectorAll('.line .line-head strong').forEach((heading,index)=>{
+  const line=receiptOrder.lines[index];
+  if(!line)return;
+  const prefix=line.isVegan&&!line.productName.startsWith('🌱 ')?'🌱 ':'';
+  heading.textContent=`${line.quantity} × ${prefix}${line.productName}${line.variantName==='Regular'?'':' — '+line.variantName}`;
+ });
+}
+new MutationObserver(markVeganReceiptLines).observe(target,{childList:true});
+</script>
 </body>
 </html>
