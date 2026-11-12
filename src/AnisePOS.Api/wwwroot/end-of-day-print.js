@@ -23,15 +23,15 @@ function endOfDayPrinterContent(date, report, external) {
     `Order count                 ${report.orderCount}`, '', 'DELIVERY PLATFORMS',
     `Uber Eats                   ${money.format(external.uberEats)}`,
     `Just Eat Card               ${money.format(external.justEatCard)}`,
-    `Just Eat Cash               ${money.format(external.justEatCash)}`,
     `Deliveroo                   ${money.format(external.deliveroo)}`,
+    `Just Eat Cash               ${money.format(external.justEatCash)}`,
     `Platform total              ${money.format(platformTotal)}`, '',
     `TOTAL RECORDED TAKINGS      ${money.format(report.paidSales + platformTotal)}`, '', '', ''
   ];
   return `<text align="center" em="true">${text(lines[0])}</text><text align="center">${text(lines[1])}${text(lines[2])}</text><text align="left">${lines.slice(4).map(text).join('')}</text><cut type="feed"/>`;
 }
 
-async function printEndOfDay(date, report, external) {
+window.printEndOfDay = async function printEndOfDay(date, report, external) {
   const body = `<?xml version="1.0" encoding="utf-8"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><epos-print xmlns="http://www.epson-pos.com/schemas/2011/03/epos-print">${endOfDayPrinterContent(date, report, external)}</epos-print></s:Body></s:Envelope>`;
   const response = await fetch('https://' + await receiptPrinterAddress() + '/cgi-bin/epos/service.cgi?devid=local_printer&timeout=10000', { method:'POST', headers:{'Content-Type':'text/xml; charset=utf-8'}, body, signal:AbortSignal.timeout(15000), credentials:'omit' });
   if (!response.ok) throw new Error('The printer returned HTTP ' + response.status + '.');

@@ -202,6 +202,7 @@ app.MapWebsiteOrderEndpoints();
 app.MapGoogleMailOAuthEndpoints();
 app.MapWebsiteStripeWebhook();
 app.MapOrderQueueEndpoints();
+app.MapOrderLifecycleEndpoints();
 app.MapStaffPushEndpoints();
 
 app.MapReportEndpoints();

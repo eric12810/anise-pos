@@ -27,6 +27,7 @@ public sealed class AniseDbContext(DbContextOptions<AniseDbContext> options) : D
     public DbSet<StaffPushSubscription> StaffPushSubscriptions => Set<StaffPushSubscription>();
     public DbSet<StaffPushDelivery> StaffPushDeliveries => Set<StaffPushDelivery>();
     public DbSet<OrderStatusHistory> OrderStatusHistory => Set<OrderStatusHistory>();
+    public DbSet<Refund> Refunds => Set<Refund>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -64,5 +65,6 @@ public sealed class AniseDbContext(DbContextOptions<AniseDbContext> options) : D
         builder.Entity<WebsiteCheckout>(e => { e.HasIndex(x => x.RequestId).IsUnique(); e.HasIndex(x => x.StripeSessionId).IsUnique().HasFilter("[StripeSessionId] IS NOT NULL"); e.Property(x => x.RequestHash).HasMaxLength(64); e.Property(x => x.Total).HasPrecision(10, 2); e.Property(x => x.StripeSessionId).HasMaxLength(255); e.Property(x => x.StripeSessionUrl).HasMaxLength(2048); });
         builder.Entity<WebsiteConfirmation>(e => { e.HasIndex(x => new { x.OrderId, x.Kind }).IsUnique(); e.Property(x => x.Kind).HasMaxLength(20); e.Property(x => x.State).HasMaxLength(20); e.HasOne(x => x.Order).WithMany().HasForeignKey(x => x.OrderId).OnDelete(DeleteBehavior.Restrict); });
         builder.Entity<OrderStatusHistory>(e => { e.HasIndex(x => new { x.OrderId, x.CreatedAtUtc }); e.Property(x => x.Note).HasMaxLength(500); e.Property(x => x.ChangedBy).HasMaxLength(100); });
+        builder.Entity<Refund>(e => { e.HasIndex(x => new { x.OrderId, x.CreatedAtUtc }); e.Property(x => x.Amount).HasPrecision(10, 2); e.Property(x => x.Reason).HasMaxLength(200); e.Property(x => x.ProviderReference).HasMaxLength(150); e.Property(x => x.Note).HasMaxLength(500); e.Property(x => x.CompletedAtUtc).HasPrecision(0); e.HasOne(x => x.Order).WithMany(x => x.Refunds).HasForeignKey(x => x.OrderId).OnDelete(DeleteBehavior.Restrict); });
     }
 }

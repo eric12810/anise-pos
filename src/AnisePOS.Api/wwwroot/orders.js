@@ -139,6 +139,10 @@ function buildOrderCard(order, id, compact = false) {
                 }
             } else card.append(element('p', 'Payment not recorded', 'payment missing'));
             card.append(receipts, ...paymentActions);
+            if (!compact && !['Completed', 'Cancelled', 'Refunded'].includes(order.status)) {
+                const cancel = element('button', 'Cancel order', 'decline-order');
+                cancel.type = 'button'; cancel.addEventListener('click', () => cancelOrder(order)); card.append(cancel);
+            }
             if (websiteOrder && order.status === 'Placed') {
                 const acceptForm = element('form', undefined, 'accept-form');
                 const label = element('label', 'Minutes until ' + (order.orderType === 'Delivery' ? 'delivery' : 'collection'));
@@ -173,6 +177,15 @@ function buildOrderCard(order, id, compact = false) {
                 card.append(button);
             }
             return card;
+}
+
+async function cancelOrder(order) {
+    if (saving) return;
+    const reason = window.prompt('Cancellation reason: Customer Request, Duplicate Order, Item Unavailable or Other', 'Customer Request');
+    if (!reason || !window.confirm('Cancel order #' + order.orderNumber + '? This does not automatically refund a payment.')) return;
+    saving = true;
+    try { await request('/api/orders/' + order.orderNumber + '/cancel', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({reason: reason.trim()})}); closeOrderDetails(); }
+    catch (error) { message.textContent = error.message; } finally { saving = false; }
 }
 
 function updateOverdueCards() {

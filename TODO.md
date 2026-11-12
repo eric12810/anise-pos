@@ -4,6 +4,11 @@ Shared task list for the Anise POS and customer website. This file lives in the 
 
 ## POS
 
+### Future order lifecycle work
+
+- [ ] **End of Day Cancellation and Refund Compatibility** — Exclude unpaid cancelled orders from completed sales; record refunds on their actual transaction dates; preserve historical totals; break down refunds by payment method and platform; include cash refunds in till reconciliation; avoid double-counting marketplace figures; support refunds for prior trading days; distinguish gross sales, refunds and net sales.
+- [ ] **Staff Permissions and Manager Approval** — Add configurable staff permissions and optional manager PIN approval for cancellations, full refunds, partial refunds and reopening completed orders, with staff-level audit records.
+
 ### Telephone orders and payments
 
 - [ ] **Add “Copy & Open Stripe” button**

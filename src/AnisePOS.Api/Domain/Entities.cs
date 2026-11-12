@@ -130,6 +130,25 @@ public sealed class Order : Entity
     public ICollection<OrderLine> Lines { get; set; } = new List<OrderLine>();
     public ICollection<Payment> Payments { get; set; } = new List<Payment>();
     public ICollection<OrderStatusHistory> StatusHistory { get; set; } = new List<OrderStatusHistory>();
+    public DateTimeOffset? CancelledAtUtc { get; set; }
+    public string? CancellationReason { get; set; }
+    public DateTimeOffset? ReopenedAtUtc { get; set; }
+    public ICollection<Refund> Refunds { get; set; } = new List<Refund>();
+}
+
+public enum RefundStatus { Pending, Completed, Failed }
+
+public sealed class Refund : Entity
+{
+    public Guid OrderId { get; set; }
+    public Order Order { get; set; } = null!;
+    public decimal Amount { get; set; }
+    public PaymentMethod Method { get; set; }
+    public RefundStatus Status { get; set; } = RefundStatus.Pending;
+    public string Reason { get; set; } = string.Empty;
+    public string? ProviderReference { get; set; }
+    public DateTimeOffset? CompletedAtUtc { get; set; }
+    public string? Note { get; set; }
 }
 
 public sealed class WebsiteConfirmation : Entity
