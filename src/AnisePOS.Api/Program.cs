@@ -75,8 +75,7 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
 builder.Services.AddAuthorizationBuilder()
     .AddPolicy("ManageMenu", policy => policy.RequireRole("Owner", "Manager"))
     .AddPolicy("ViewReports", policy => policy.RequireRole("Owner", "Manager"))
-    .AddPolicy("ManageStaff", policy => policy.RequireRole("Owner"))
-    .AddPolicy("OutboundIpDiagnosticOwner", policy => policy.RequireRole("Owner"));
+    .AddPolicy("ManageStaff", policy => policy.RequireRole("Owner"));
 
 var app = builder.Build();
 
@@ -206,6 +205,5 @@ app.MapReportEndpoints();
 app.MapAdminEndpoints();
 app.MapPromotionEndpoints();
 app.MapStaffAuthEndpoints();
-app.MapInternalDiagnosticsEndpoints();
 
 app.Run();
