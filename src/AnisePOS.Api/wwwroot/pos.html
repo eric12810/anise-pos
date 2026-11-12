@@ -73,7 +73,8 @@
     document.querySelector('#copy-total').onclick = async () => {
       const amount = document.querySelector('#total').textContent.replace(/[£,]/g, '');
       const status = document.querySelector('#copy-status');
-      const stripeWindow = window.open('https://dashboard.stripe.com/login', '_blank', 'noopener,noreferrer');
+      const useStripeShortcut = state.type === 'Delivery' && state.payment === 'Card';
+      const stripeWindow = useStripeShortcut ? window.open('https://dashboard.stripe.com/login', '_blank', 'noopener,noreferrer') : null;
       try {
         if (navigator.clipboard?.writeText) {
           await navigator.clipboard.writeText(amount);
@@ -91,9 +92,9 @@
             document.querySelector('#copy-total').focus();
           }
         }
-        status.textContent = stripeWindow ? 'Copied ' + amount + ' · Stripe opened' : 'Copied ' + amount + '. Safari blocked the Stripe tab; open it manually.';
+        status.textContent = !useStripeShortcut ? 'Copied ' + amount : stripeWindow ? 'Copied ' + amount + ' · Stripe opened' : 'Copied ' + amount + '. Safari blocked the Stripe tab; open it manually.';
       } catch {
-        status.textContent = stripeWindow ? 'Could not copy. Enter ' + amount + ' in the Stripe app.' : 'Could not copy, and Safari blocked the Stripe tab. Enter ' + amount + ' in the Stripe app.';
+        status.textContent = !useStripeShortcut ? 'Could not copy. Enter ' + amount + ' manually.' : stripeWindow ? 'Could not copy. Enter ' + amount + ' in the Stripe app.' : 'Could not copy, and Safari blocked the Stripe tab. Enter ' + amount + ' in the Stripe app.';
       }
     };
     document.querySelectorAll('#types button').forEach(b=>b.onclick=()=>{const changed=state.type!==b.dataset.type;state.type=b.dataset.type;if(changed)updateEstimateOptions();document.querySelectorAll('#types button').forEach(x=>x.classList.toggle('active',x===b));document.querySelector('#delivery-fields').hidden=state.type!=='Delivery';renderCart()});
