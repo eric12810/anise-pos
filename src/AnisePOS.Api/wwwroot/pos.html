@@ -30,7 +30,7 @@
 <body class="pos-screen">
   <header class="pos-header"><h1>Anise POS</h1><nav class="pos-navigation" aria-label="POS navigation"><a href="/pos.html">POS</a><a href="/orders.html">Order queue</a><a href="/history.html">Order history</a><a href="/menu-admin.html" data-roles="Owner,Manager" hidden>Menu manager</a><a href="/reports.html" data-roles="Owner,Manager" hidden>Reports</a><a id="website-settings-link" href="/website-settings.html" data-roles="Owner,Manager" hidden>Settings</a><a href="/staff-admin.html" data-roles="Owner" hidden>Staff</a></nav><span id="staff">Checking staff session…</span></header>
   <main><section class="menu"><nav class="categories" id="categories" aria-label="Menu categories"></nav><div id="products"></div></section>
-  <aside class="cart"><h2>Current order</h2><div class="cart-lines" id="cart-lines"><p>Your cart is empty.</p></div><p id="delivery-warning" hidden></p><div class="custom-fee"><label>Fee description<input id="custom-fee-description" maxlength="160" placeholder="e.g. Extra item"></label><label>Fee (£)<input id="custom-fee" type="number" min="0" step="0.10" inputmode="decimal" value="0.00"></label></div><button class="total" id="copy-total" type="button" disabled><span>Copy total</span><span id="total">£0.00</span></button><small id="copy-status" class="field-status" role="status"></small>
+  <aside class="cart"><h2>Current order</h2><div class="cart-lines" id="cart-lines"><p>Your cart is empty.</p></div><p id="delivery-warning" hidden></p><div class="custom-fee"><label>Fee description<input id="custom-fee-description" maxlength="160" placeholder="e.g. Extra item"></label><label>Fee (£)<input id="custom-fee" type="number" min="0" step="0.10" inputmode="decimal" value="0.00"></label></div><button class="total" id="copy-total" type="button" disabled><span>Total</span><span id="total">£0.00</span></button><small id="copy-status" class="field-status" role="status"></small>
     <div class="types" id="types"><button class="active" data-type="Collection">Collection</button><button data-type="Delivery">Delivery</button></div>
     <label>Payment method</label><div class="types" id="payments"><button class="active" data-payment="Cash">Cash</button><button data-payment="Card">Card</button></div>
     <label>Name<input id="customer-name" autocomplete="name"></label><label>Phone<input id="customer-phone" autocomplete="tel"><small id="phone-lookup-status" class="field-status"></small></label><div id="delivery-fields" class="delivery-fields" hidden><div class="postcode-row"><label>Postcode<div id="postcode-search"></div></label><button id="find-address" type="button">Map</button></div><small id="address-lookup-status" class="field-status"></small><label id="address-results" hidden>Select address<select id="address-select"><option value="">Choose an address</option></select></label><label>Address line 1<input id="delivery-address" autocomplete="address-line1"></label><label>Address line 2 (optional)<input id="delivery-address-2" autocomplete="address-line2"></label><label>Delivery charge (£)<input id="delivery-fee" type="number" min="0" step="0.10" inputmode="decimal" value="0.00"></label></div><label>Order note<textarea id="notes" rows="2"></textarea></label>
@@ -73,6 +73,7 @@
     document.querySelector('#copy-total').onclick = async () => {
       const amount = document.querySelector('#total').textContent.replace(/[£,]/g, '');
       const status = document.querySelector('#copy-status');
+      const stripeWindow = window.open('https://dashboard.stripe.com/login', '_blank', 'noopener,noreferrer');
       try {
         if (navigator.clipboard?.writeText) {
           await navigator.clipboard.writeText(amount);
@@ -90,9 +91,9 @@
             document.querySelector('#copy-total').focus();
           }
         }
-        status.textContent = 'Copied ' + amount;
+        status.textContent = stripeWindow ? 'Copied ' + amount + ' · Stripe opened' : 'Copied ' + amount + '. Safari blocked the Stripe tab; open it manually.';
       } catch {
-        status.textContent = 'Could not copy. Enter ' + amount + ' in the Stripe app.';
+        status.textContent = stripeWindow ? 'Could not copy. Enter ' + amount + ' in the Stripe app.' : 'Could not copy, and Safari blocked the Stripe tab. Enter ' + amount + ' in the Stripe app.';
       }
     };
     document.querySelectorAll('#types button').forEach(b=>b.onclick=()=>{const changed=state.type!==b.dataset.type;state.type=b.dataset.type;if(changed)updateEstimateOptions();document.querySelectorAll('#types button').forEach(x=>x.classList.toggle('active',x===b));document.querySelector('#delivery-fields').hidden=state.type!=='Delivery';renderCart()});
