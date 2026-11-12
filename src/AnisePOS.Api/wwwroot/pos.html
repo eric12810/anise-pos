@@ -38,7 +38,7 @@
     <button class="primary" id="place" disabled>Place order</button><p id="notice"></p>
   </aside></main><div id="route-summary" class="field-status" aria-live="polite"></div>
   <dialog id="product-dialog"><div class="modal"><h2 id="modal-name"></h2><div id="variant-choices"></div><div id="modifier-choices"></div><label>Special instructions<input id="special-instructions" maxlength="500" placeholder="e.g. No onions, extra spicy, less sauce"></label><label>Quantity<div class="modal-quantity"><button id="quantity-minus" type="button" aria-label="Decrease quantity">−</button><output id="custom-quantity" aria-live="polite">1</output><button id="quantity-plus" type="button" aria-label="Increase quantity">+</button></div></label><p id="modal-error" class="modal-error" role="alert" hidden></p><div class="modal-footer"><button id="cancel" type="button">Cancel</button><button class="primary" id="add" type="button">Add to order</button></div></div></dialog>
-  <script src="/receipt-print.js?v=10"></script>
+  <script src="/receipt-print.js?v=11"></script>
   <script>
     const state={ menu:[], category:null, cart:[], type:'Collection', payment:'Cash', selected:null, deliveryAddress:{postcode:'',line1:'',line2:''} };
     let deliveryEditVersion=0,postcodeSearch,postcodeBlurTimer,postcodeSelectionPending=false;

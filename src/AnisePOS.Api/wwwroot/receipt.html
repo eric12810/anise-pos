@@ -12,7 +12,7 @@
 <div class="controls"><a id="back" href="/orders.html">Back to queue</a><button id="direct" disabled>Print</button><button id="check-printer" type="button">Check printer connection</button></div>
 <p id="print-status" role="status" style="text-align:center"></p>
 <main class="receipt" id="receipt"><p>Loading receipt…</p></main>
-<script src="/receipt-print.js?v=10"></script>
+<script src="/receipt-print.js?v=11"></script>
 <script>
 'use strict';
 const params=new URLSearchParams(location.search),orderNumber=params.get('order'),type='customer',target=document.querySelector('#receipt'),money=value=>new Intl.NumberFormat('en-GB',{style:'currency',currency:'GBP'}).format(value),escapeHtml=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
