@@ -416,7 +416,7 @@ public static class CommerceEndpoints
             Results.Ok(new { browserKey = configuration["GoogleMaps:BrowserKey"], configured = !string.IsNullOrWhiteSpace(configuration["GoogleMaps:BrowserKey"]) }));
 
         orders.MapPost("/driving-route", async (DrivingRouteRequest request, IConfiguration configuration,
-            IHttpClientFactory httpClientFactory, CancellationToken ct) =>
+            IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, CancellationToken ct) =>
         {
             var key = configuration["GoogleMaps:RoutesServerKey"];
             var destination = string.IsNullOrWhiteSpace(request.Address) ? request.Postcode?.Trim() : request.Address.Trim();
@@ -435,7 +435,19 @@ public static class CommerceEndpoints
             {
                 var client = httpClientFactory.CreateClient(); client.Timeout = TimeSpan.FromSeconds(12);
                 using var response = await client.SendAsync(message, ct);
-                if (!response.IsSuccessStatusCode) return Results.Problem("Google could not calculate a driving route. Confirm the address or enter a manual delivery charge.", statusCode: StatusCodes.Status502BadGateway);
+                if (!response.IsSuccessStatusCode)
+                {
+                    var body = await response.Content.ReadAsStringAsync(ct);
+                    var error = ParseGoogleRouteError(body);
+                    var category = ClassifyGoogleRouteError((int)response.StatusCode, error.Status);
+                    var ipMentioned = error.Message is not null &&
+                        System.Text.RegularExpressions.Regex.IsMatch(error.Message, "\\b(?:IP|IPv4|source address|client address)\\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    var safeMessage = SanitizeGoogleRouteMessage(error.Message, destination, request.PlaceId);
+                    loggerFactory.CreateLogger("AnisePOS.GoogleRoutes").LogWarning(
+                        "Google Routes failed. HttpStatus={HttpStatus} GoogleStatus={GoogleStatus} Category={Category} SanitisedMessage={Message} MentionsOutboundIp={MentionsOutboundIp}",
+                        (int)response.StatusCode, error.Status ?? "unknown", category, safeMessage, ipMentioned);
+                    return Results.Problem(SafeGoogleRouteError(category, ipMentioned), statusCode: GoogleRouteHttpStatus(category));
+                }
                 using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
                 var route = json.RootElement.GetProperty("routes").EnumerateArray().FirstOrDefault();
                 if (route.ValueKind == JsonValueKind.Undefined || !route.TryGetProperty("distanceMeters", out var metres))
@@ -495,6 +507,54 @@ public static class CommerceEndpoints
             return order is null ? Results.NotFound() : Results.Ok(order);
         });
     }
+
+    public static (string? Status, string? Message) ParseGoogleRouteError(string body)
+    {
+        try
+        {
+            using var json = JsonDocument.Parse(body);
+            if (!json.RootElement.TryGetProperty("error", out var error)) return (null, null);
+            var status = error.TryGetProperty("status", out var statusValue) ? statusValue.GetString() : null;
+            var message = error.TryGetProperty("message", out var messageValue) ? messageValue.GetString() : null;
+            return (status, message);
+        }
+        catch (JsonException) { return (null, null); }
+    }
+
+    public static string ClassifyGoogleRouteError(int httpStatus, string? googleStatus) =>
+        googleStatus is "PERMISSION_DENIED" or "UNAUTHENTICATED" || httpStatus is 401 or 403 ? "ApiRestriction" :
+        googleStatus == "INVALID_ARGUMENT" || httpStatus == 400 ? "InvalidRequest" :
+        googleStatus == "RESOURCE_EXHAUSTED" || httpStatus == 429 ? "Quota" :
+        googleStatus is "UNAVAILABLE" or "DEADLINE_EXCEEDED" || httpStatus is 408 or 500 or 502 or 503 or 504 ? "NetworkOrGoogleUnavailable" :
+        "GoogleError";
+
+    public static string SanitizeGoogleRouteMessage(string? message, string? destination, string? placeId)
+    {
+        var safe = string.IsNullOrWhiteSpace(message) ? "No error message returned." : message.Trim();
+        if (!string.IsNullOrWhiteSpace(destination)) safe = safe.Replace(destination, "[redacted-destination]", StringComparison.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(placeId)) safe = safe.Replace(placeId, "[redacted-place-id]", StringComparison.Ordinal);
+        safe = System.Text.RegularExpressions.Regex.Replace(safe, "(?i)(AIza[0-9A-Za-z_-]{20,}|key[= ]+[0-9A-Za-z_-]{12,})", "[redacted-key]");
+        safe = new string(safe.Where(c => !char.IsControl(c)).ToArray());
+        return safe.Length <= 240 ? safe : safe[..240];
+    }
+
+    private static string SafeGoogleRouteError(string category, bool ipMentioned) => category switch
+    {
+        "ApiRestriction" when ipMentioned => "Google rejected the Routes request from the server network. Check the Routes key's server/IP restrictions.",
+        "ApiRestriction" => "Google rejected the Routes request because of API-key or API restrictions.",
+        "InvalidRequest" => "Google rejected the route request. Check the postcode or selected address.",
+        "Quota" => "Google Routes quota or billing limits were reached. Enter a manual delivery charge.",
+        "NetworkOrGoogleUnavailable" => "Google Routes is temporarily unavailable. Enter a manual delivery charge.",
+        _ => "Google could not calculate the route. Enter a manual delivery charge."
+    };
+
+    private static int GoogleRouteHttpStatus(string category) => category switch
+    {
+        "InvalidRequest" => StatusCodes.Status400BadRequest,
+        "Quota" => StatusCodes.Status429TooManyRequests,
+        "NetworkOrGoogleUnavailable" => StatusCodes.Status503ServiceUnavailable,
+        _ => StatusCodes.Status502BadGateway
+    };
 
     private static string Slugify(string input) => string.Join('-', input.Trim().ToLowerInvariant().Split([' ', '_', '-'], StringSplitOptions.RemoveEmptyEntries));
     private static IResult Invalid(string key, string message) => Results.ValidationProblem(new Dictionary<string, string[]> { [key] = [message] });

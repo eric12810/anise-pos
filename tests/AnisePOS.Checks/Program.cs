@@ -198,6 +198,19 @@ if (DeliverySettingsForWebsite.NormalizeSector(" nw1 8 ") != "NW1 8" ||
     DeliverySettingsForWebsite.Decide(sectorSettings, "NW1 8ET", 51.60, -0.1492259) != null)
     throw new Exception("Delivery distance, sector and approval checks failed.");
 Console.WriteLine("Passed delivery distance, postcode fee and approval checks.");
+
+var permissionError = CommerceEndpoints.ParseGoogleRouteError("{\"error\":{\"status\":\"PERMISSION_DENIED\",\"message\":\"Requests from IP 203.0.113.10 to NW3 3AX are blocked\"}}");
+if (permissionError.Status != "PERMISSION_DENIED" ||
+    CommerceEndpoints.ClassifyGoogleRouteError(403, permissionError.Status) != "ApiRestriction" ||
+    !CommerceEndpoints.SanitizeGoogleRouteMessage(permissionError.Message, "NW3 3AX", null).Contains("[redacted-destination]") ||
+    CommerceEndpoints.ClassifyGoogleRouteError(400, "INVALID_ARGUMENT") != "InvalidRequest" ||
+    CommerceEndpoints.ClassifyGoogleRouteError(429, "RESOURCE_EXHAUSTED") != "Quota" ||
+    CommerceEndpoints.ClassifyGoogleRouteError(503, "UNAVAILABLE") != "NetworkOrGoogleUnavailable")
+    throw new Exception("Google Routes error parsing or categorisation checks failed.");
+if (!System.Text.Json.JsonSerializer.Serialize(new DrivingRouteRequest("NW3 3AX", null, null)).Contains("NW3 3AX") ||
+    !System.Text.Json.JsonSerializer.Serialize(new DrivingRouteRequest(null, null, "ChIJtest-place-id")).Contains("ChIJtest-place-id"))
+    throw new Exception("Google Routes postcode and Place ID request checks failed.");
+Console.WriteLine("Passed Google Routes error, postcode-only and Place ID request checks.");
 var bandSettings = new DeliverySettings { RadiusMiles = 2, Fee = 4m, RadiusBandsJson = System.Text.Json.JsonSerializer.Serialize(new[] { new DeliveryRadiusBand(2, 4m), new DeliveryRadiusBand(1, 2m) }), SectorsJson = sectorSettings.SectorsJson };
 var innerBand = DeliverySettingsForWebsite.Decide(bandSettings, "NW1 9AA", 51.5434592, -0.1492259);
 var outerBand = DeliverySettingsForWebsite.Decide(bandSettings, "NW1 9AA", 51.565, -0.1492259);
