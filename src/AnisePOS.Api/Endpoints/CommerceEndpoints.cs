@@ -413,7 +413,7 @@ public static class CommerceEndpoints
         });
 
         orders.MapGet("/google-maps-config", (IConfiguration configuration) =>
-            Results.Ok(new { browserKey = configuration["GoogleMaps:BrowserKey"] }));
+            Results.Ok(new { browserKey = configuration["GoogleMaps:BrowserKey"], configured = !string.IsNullOrWhiteSpace(configuration["GoogleMaps:BrowserKey"]) }));
 
         orders.MapPost("/driving-route", async (DrivingRouteRequest request, IConfiguration configuration,
             IHttpClientFactory httpClientFactory, CancellationToken ct) =>
