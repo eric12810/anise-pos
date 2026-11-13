@@ -55,6 +55,8 @@ jobs:
         run: dotnet run --project tests/AnisePOS.Checks --configuration Release --no-build
       - name: Run deployment safeguard tests
         run: python3 -m unittest discover -s tests/deployment -v
+      - name: Preflight SQL migrations without database access
+        run: python3 scripts/check-migrations.py
       - name: Publish staging API
         run: >-
           dotnet publish src/AnisePOS.Api/AnisePOS.Api.csproj

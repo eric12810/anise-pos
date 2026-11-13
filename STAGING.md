@@ -47,6 +47,32 @@ file upload alone does not establish that the application works.
 
 ## Local verification
 
+## SQL migration procedure
+
+The FTPS deployment does not execute SQL. The workflow performs an offline checksum
+and safety preflight only; it cannot prove which migrations are present in the
+staging database. The database history table and pending migration state must be
+checked during an explicitly approved staging migration operation.
+
+Before applying a migration, confirm the effective staging site configuration,
+the database identity (`anisedb` on the verified staging host), a recent restorable
+staging backup, and that no production credentials are available to the operation.
+Run the migration from a controlled staging-only SQL session, record its filename,
+SHA-256 checksum and UTC completion time in the migration history table, then run
+read-only checks for the expected columns, tables, constraints and indexes.
+
+Migration 010 adds the three nullable order lifecycle columns and the `Refunds`
+table. It is idempotent and must not be run until its checksum matches
+`database/migration-checksums.json`. Do not edit an applied migration; create a
+new numbered migration instead. If a migration fails, keep the application offline,
+preserve the error and transaction state, restore the staging backup only after
+review, and repeat verification before resuming deployment.
+
+Production release requires the same checksum and schema preflight against the
+separately verified production database, an independent production backup and
+explicit production approval. Staging credentials and databases must never be
+reused for that operation.
+
 ```sh
 dotnet restore AnisePOS.sln
 dotnet build AnisePOS.sln --configuration Release --no-restore
