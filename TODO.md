@@ -93,6 +93,17 @@ _No website-only tasks recorded yet. Add them here as they arise._
   - Decide whether to retain original high-resolution uploads separately for future reuse, rather than silently discarding them during conversion.
   - Check image quality, mobile loading performance, database growth, and backup/restore coverage. Test with staging POS and staging website only before proposing a production migration.
 
+### Customer and address management — post-launch (low priority)
+
+- [ ] **Improve customer/address storage and local postcode lookup after POS and website launch**
+  - Review existing customer and address tables; prefer dedicated tables within each environment's existing SQL Server database unless a separate database is genuinely necessary.
+  - Build a postcode-to-street directory from independently confirmed customer-provided address information, without storing personal customer details in the shared directory.
+  - When staff enter a postcode, check locally known streets and suggest them alongside Google Places. A postcode may cover multiple streets or buildings: never silently assume one street is correct.
+  - Preserve manual address entry and corrections for missing or inaccurate Google results; save confirmed details for future lookups.
+  - Consider secure, verified customer-address reuse across POS and website through the POS API; never expose records solely from an unverified phone-number match.
+  - Isolate staging and production databases and data. Never copy live customer, order or payment records to staging.
+  - Plan schema migrations and tests on staging first; do not modify production databases without explicit approval.
+
 ### Other improvements
 
 _Add new shared tasks here as they arise; place POS-only and Website-only tasks in their respective sections._
