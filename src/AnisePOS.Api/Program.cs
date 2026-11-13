@@ -32,6 +32,7 @@ builder.Services.AddSingleton<GoogleRouteDiagnosticState>();
 builder.Services.AddSingleton<GoogleMailTokenStore>();
 builder.Services.AddSingleton<GmailConfirmationSender>();
 builder.Services.AddHostedService<WebsiteConfirmationWorker>();
+builder.Services.AddHostedService<WebsiteStripeReconciliationWorker>();
 builder.Services.AddSingleton<PushKeyStore>();
 builder.Services.AddHostedService<StaffPushWorker>();
 builder.Services.AddSingleton<ReceiptPrinter>();

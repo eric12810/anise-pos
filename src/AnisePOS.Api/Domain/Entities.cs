@@ -242,6 +242,8 @@ public sealed class WebsiteCheckout : Entity
     public string? StripeSessionId { get; set; }
     public string? StripeSessionUrl { get; set; }
     public Guid? CompletedOrderId { get; set; }
+    public string? ReconciliationError { get; set; }
+    public DateTimeOffset? ReconciliationCheckedAtUtc { get; set; }
 }
 
 public sealed class DeliverySettings

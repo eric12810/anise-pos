@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Cors.Infrastructure;
 using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Configuration;
 using System.Security.Cryptography;
 using WebPush;
 
@@ -137,7 +138,7 @@ if (!WebsiteCheckoutValidation.ValidName("Jean O’Neil") || WebsiteCheckoutVali
 Console.WriteLine("Passed customer details validation checks.");
 
 var checkoutId = Guid.NewGuid();
-var eventJson = System.Text.Json.JsonSerializer.Serialize(new { type = "checkout.session.completed", livemode = false, data = new { @object = new { @object = "checkout.session", id = "cs_test_123", payment_status = "paid", currency = "gbp", amount_total = 1850, client_reference_id = checkoutId.ToString() } } });
+var eventJson = System.Text.Json.JsonSerializer.Serialize(new { type = "checkout.session.completed", livemode = false, data = new { @object = new { @object = "checkout.session", livemode = false, id = "cs_test_123", payment_status = "paid", currency = "gbp", amount_total = 1850, client_reference_id = checkoutId.ToString() } } });
 using (var validEvent = System.Text.Json.JsonDocument.Parse(eventJson))
 {
     var paidSession = WebsiteStripeWebhook.ReadPaidSession(validEvent.RootElement);
@@ -151,6 +152,38 @@ foreach (var invalid in new[] { eventJson.Replace("\"paid\"", "\"unpaid\""), eve
         throw new Exception("Invalid Stripe webhook was accepted.");
 }
 Console.WriteLine("Passed paid Stripe webhook event validation checks.");
+
+var liveEventJson = eventJson.Replace("cs_test_123", "cs_live_123").Replace("\"livemode\":false", "\"livemode\":true");
+using (var liveEvent = System.Text.Json.JsonDocument.Parse(liveEventJson))
+{
+    if (WebsiteStripeWebhook.ReadPaidSession(liveEvent.RootElement, true)?.CheckoutId != checkoutId ||
+        WebsiteStripeWebhook.ReadPaidSession(liveEvent.RootElement, false) is not null)
+        throw new Exception("Live Stripe webhook mode isolation failed.");
+}
+var liveConfig = new Microsoft.Extensions.Configuration.ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> {
+    ["WebsiteCheckout:StripeMode"] = "live", ["Stripe:SecretKey"] = "sk_live_example",
+    ["WebsiteCheckout:StripeWebhookSecret"] = "whsec_example",
+    ["WebsiteCheckout:StripeSuccessUrl"] = "https://www.loveanise.co.uk/order-status.html",
+    ["WebsiteCheckout:StripeCancelUrl"] = "https://www.loveanise.co.uk/stripe-cancelled.html"
+}).Build();
+var productionHost = new TestPushEnvironment { EnvironmentName = "Production" };
+var stagingHost = new TestPushEnvironment { EnvironmentName = "Staging" };
+if (WebsiteStripeMode.From(liveConfig, productionHost)?.Live != true || WebsiteStripeMode.From(liveConfig, stagingHost) is not null)
+    throw new Exception("Live Stripe configuration isolation failed.");
+liveConfig["Stripe:SecretKey"] = "sk_test_example";
+if (WebsiteStripeMode.From(liveConfig, productionHost) is not null)
+    throw new Exception("Production accepted test Stripe keys.");
+Console.WriteLine("Passed live/test Stripe configuration isolation checks.");
+var directSessionJson = System.Text.Json.JsonSerializer.Serialize(new { id = "cs_test_123", livemode = false,
+    payment_status = "paid", currency = "gbp", amount_total = 1850, client_reference_id = checkoutId.ToString("D") });
+using (var directSession = System.Text.Json.JsonDocument.Parse(directSessionJson))
+{
+    if (!WebsiteStripeReconciliationWorker.TryPaidSession(directSession.RootElement, checkoutId, new WebsiteStripeMode(false), out var recovered) || recovered?.AmountPence != 1850 ||
+        WebsiteStripeReconciliationWorker.TryPaidSession(directSession.RootElement, checkoutId, new WebsiteStripeMode(true), out _) ||
+        WebsiteStripeReconciliationWorker.TryPaidSession(directSession.RootElement, Guid.NewGuid(), new WebsiteStripeMode(false), out _))
+        throw new Exception("Stripe reconciliation identity or mode checks failed.");
+}
+Console.WriteLine("Passed direct Stripe reconciliation identity checks.");
 
 var refundSession = System.Text.Json.JsonSerializer.Serialize(new { id = "cs_test_123", livemode = false, currency = "gbp", amount_total = 650,
     payment_intent = new { latest_charge = new { id = "ch_test_123", currency = "gbp", amount = 650, amount_refunded = 650, refunded = true } } });
@@ -294,6 +327,9 @@ var paymentId = Guid.NewGuid();
 var successfulHandler = new RefundHandler(testSessionUnrefunded, noRefunds, "{}", testSessionRefunded, doneRefunds);
 var successfulResult = await WebsiteStripeRefund.EnsureRefundedAsync(new HttpClient(successfulHandler), "sk_test_example", "cs_test_123", paymentId, 6.50m, CancellationToken.None);
 if (successfulResult != WebsiteStripeRefund.Result.Complete || successfulHandler.PostCount != 1 || successfulHandler.IdempotencyKey != "website-decline-refund-" + paymentId.ToString("N")) throw new Exception("Automatic Stripe refund failed.");
+var liveRefundHandler = new RefundHandler(testSessionUnrefunded.Replace("cs_test_", "cs_live_").Replace("\"livemode\":false", "\"livemode\":true"), noRefunds, "{}", testSessionRefunded.Replace("cs_test_", "cs_live_").Replace("\"livemode\":false", "\"livemode\":true"), doneRefunds);
+if (await WebsiteStripeRefund.EnsureRefundedAsync(new HttpClient(liveRefundHandler), "sk_live_example", "cs_live_123", paymentId, 6.50m, CancellationToken.None, true) != WebsiteStripeRefund.Result.Complete || liveRefundHandler.PostCount != 1)
+    throw new Exception("Live website refund validation failed.");
 var retryHandler = new RefundHandler(testSessionRefunded, doneRefunds);
 if (await WebsiteStripeRefund.EnsureRefundedAsync(new HttpClient(retryHandler), "sk_test_example", "cs_test_123", paymentId, 6.50m, CancellationToken.None) != WebsiteStripeRefund.Result.Complete || retryHandler.PostCount != 0) throw new Exception("Refund reconciliation repeated a refund.");
 var pendingHandler = new RefundHandler(testSessionUnrefunded, pendingRefunds);

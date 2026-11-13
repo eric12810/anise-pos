@@ -8,9 +8,9 @@ public static class WebsiteStripeRefund
     public enum Result { Complete, Pending, Unconfirmed }
 
     // Reconcile first: a previous request may have succeeded even if its response was lost.
-    public static async Task<Result> EnsureRefundedAsync(HttpClient client, string key, string sessionId, Guid paymentId, decimal amount, CancellationToken ct)
+    public static async Task<Result> EnsureRefundedAsync(HttpClient client, string key, string sessionId, Guid paymentId, decimal amount, CancellationToken ct, bool liveMode = false)
     {
-        if (!key.StartsWith("sk_test_", StringComparison.Ordinal) || !sessionId.StartsWith("cs_test_", StringComparison.Ordinal) || amount <= 0 || amount * 100m != decimal.Truncate(amount * 100m)) return Result.Unconfirmed;
+        if (!key.StartsWith(liveMode ? "sk_live_" : "sk_test_", StringComparison.Ordinal) || !sessionId.StartsWith(liveMode ? "cs_live_" : "cs_test_", StringComparison.Ordinal) || amount <= 0 || amount * 100m != decimal.Truncate(amount * 100m)) return Result.Unconfirmed;
         try
         {
             async Task<JsonDocument?> Send(HttpMethod method, string path, HttpContent? content = null)
@@ -28,10 +28,10 @@ public static class WebsiteStripeRefund
             using var session = await Send(HttpMethod.Get, "checkout/sessions/" + Uri.EscapeDataString(sessionId) + "?expand%5B%5D=payment_intent.latest_charge");
             if (session is null) return Result.Unconfirmed;
             var root = session.RootElement;
-            if (!TryCharge(root, sessionId, amount, out var chargeId, out var refunded)) return Result.Unconfirmed;
+            if (!TryCharge(root, sessionId, amount, liveMode, out var chargeId, out var refunded)) return Result.Unconfirmed;
             using var refunds = await Send(HttpMethod.Get, "refunds?limit=100&charge=" + Uri.EscapeDataString(chargeId));
             if (refunds is null) return Result.Unconfirmed;
-            if (OrderQueueEndpoints.HasFullRefund(root, sessionId, amount) && OrderQueueEndpoints.HasSuccessfulRefunds(refunds.RootElement, decimal.ToInt64(amount * 100m))) return Result.Complete;
+            if (OrderQueueEndpoints.HasFullRefund(root, sessionId, amount, liveMode) && OrderQueueEndpoints.HasSuccessfulRefunds(refunds.RootElement, decimal.ToInt64(amount * 100m))) return Result.Complete;
             if (!refunds.RootElement.TryGetProperty("has_more", out var more) || more.ValueKind != JsonValueKind.False ||
                 !refunds.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Array) return Result.Unconfirmed;
             // Do not create a second refund if a manual or prior refund is in flight or partial.
@@ -41,17 +41,17 @@ public static class WebsiteStripeRefund
             // Only a fresh Stripe read, including completed refund records, can finalize the order.
             using var updated = await Send(HttpMethod.Get, "checkout/sessions/" + Uri.EscapeDataString(sessionId) + "?expand%5B%5D=payment_intent.latest_charge");
             using var updatedRefunds = await Send(HttpMethod.Get, "refunds?limit=100&charge=" + Uri.EscapeDataString(chargeId));
-            return updated is not null && updatedRefunds is not null && OrderQueueEndpoints.HasFullRefund(updated.RootElement, sessionId, amount) && OrderQueueEndpoints.HasSuccessfulRefunds(updatedRefunds.RootElement, decimal.ToInt64(amount * 100m)) ? Result.Complete : Result.Pending;
+            return updated is not null && updatedRefunds is not null && OrderQueueEndpoints.HasFullRefund(updated.RootElement, sessionId, amount, liveMode) && OrderQueueEndpoints.HasSuccessfulRefunds(updatedRefunds.RootElement, decimal.ToInt64(amount * 100m)) ? Result.Complete : Result.Pending;
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException or InvalidOperationException or OverflowException)
         { return Result.Unconfirmed; }
     }
 
-    private static bool TryCharge(JsonElement root, string sessionId, decimal expected, out string chargeId, out long refunded)
+    private static bool TryCharge(JsonElement root, string sessionId, decimal expected, bool liveMode, out string chargeId, out long refunded)
     {
         chargeId = ""; refunded = 0;
         if (!root.TryGetProperty("id", out var id) || id.GetString() != sessionId ||
-            !root.TryGetProperty("livemode", out var live) || live.ValueKind != JsonValueKind.False ||
+            !root.TryGetProperty("livemode", out var live) || live.ValueKind != (liveMode ? JsonValueKind.True : JsonValueKind.False) ||
             !root.TryGetProperty("payment_status", out var status) || status.GetString() != "paid" ||
             !root.TryGetProperty("currency", out var currency) || currency.GetString() != "gbp" ||
             !root.TryGetProperty("amount_total", out var total) || !total.TryGetInt64(out var pence) || pence != expected * 100m ||

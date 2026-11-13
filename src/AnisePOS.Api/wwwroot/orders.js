@@ -1,5 +1,21 @@
 'use strict';
 const message = document.querySelector('#message');
+const stripeAlert = document.createElement('p');
+stripeAlert.style.cssText = 'margin:0 24px 16px;padding:12px;background:#fff2d9;color:#7a3000;font-weight:700';
+stripeAlert.hidden = true;
+message.after(stripeAlert);
+async function checkStripeAlerts() {
+    try {
+        const response = await fetch('/api/admin/stripe-checkout-alerts', {credentials:'same-origin', cache:'no-store'});
+        if (response.status === 403) return;
+        if (!response.ok) throw new Error();
+        const alerts = await response.json();
+        stripeAlert.hidden = alerts.length === 0;
+        stripeAlert.textContent = alerts.length ? `${alerts.length} website card checkout${alerts.length === 1 ? '' : 's'} need payment review. Check Stripe and the POS logs before taking another order from these customers.` : '';
+    } catch (_) { stripeAlert.hidden = false; stripeAlert.textContent = 'Could not check website card payment alerts. Ask a manager to review Stripe.'; }
+}
+checkStripeAlerts();
+setInterval(checkStripeAlerts, 60000);
 const updated = document.querySelector('#updated');
 const refresh = document.querySelector('#refresh');
 const money = new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP' });

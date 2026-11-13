@@ -17,11 +17,11 @@ public static class OrderQueueEndpoints
         _ => false
     };
 
-    public static bool HasFullRefund(JsonElement session, string sessionId, decimal expectedAmount)
+    public static bool HasFullRefund(JsonElement session, string sessionId, decimal expectedAmount, bool liveMode = false)
     {
         return session.ValueKind == JsonValueKind.Object &&
             session.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String && id.GetString() == sessionId &&
-            session.TryGetProperty("livemode", out var live) && live.ValueKind == JsonValueKind.False &&
+            session.TryGetProperty("livemode", out var live) && live.ValueKind == (liveMode ? JsonValueKind.True : JsonValueKind.False) &&
             session.TryGetProperty("currency", out var currency) && currency.ValueKind == JsonValueKind.String && currency.GetString() == "gbp" &&
             session.TryGetProperty("amount_total", out var total) && total.ValueKind == JsonValueKind.Number && total.TryGetInt64(out var amount) && amount == expectedAmount * 100m && amount > 0 &&
             session.TryGetProperty("payment_intent", out var intent) && intent.ValueKind == JsonValueKind.Object &&
@@ -131,7 +131,7 @@ public static class OrderQueueEndpoints
         });
 
         queue.MapPut("/{orderNumber:long}/decline", async (long orderNumber, AniseDbContext db,
-            IConfiguration config, IHttpClientFactory clients, ClaimsPrincipal staff, CancellationToken ct) =>
+            IConfiguration config, IHostEnvironment environment, IHttpClientFactory clients, ClaimsPrincipal staff, CancellationToken ct) =>
         {
             var initial = await db.Orders.AsNoTracking().Include(o => o.Payments).SingleOrDefaultAsync(o => o.OrderNumber == orderNumber, ct);
             if (initial is null) return Results.NotFound();
@@ -143,9 +143,9 @@ public static class OrderQueueEndpoints
             if (websitePayment.Provider == "StripeCheckout")
             {
                 var key = config["Stripe:SecretKey"];
-                if (key is null || !key.StartsWith("sk_test_", StringComparison.Ordinal) ||
-                    websitePayment.ProviderReference is null || !websitePayment.ProviderReference.StartsWith("cs_test_", StringComparison.Ordinal))
-                    return Results.Problem("Stripe test refunds are not configured.", statusCode: 503);
+                var stripeMode = WebsiteStripeMode.From(config, environment);
+                if (key is null || stripeMode is null || !stripeMode.MatchesSession(websitePayment.ProviderReference))
+                    return Results.Problem("Stripe refunds are not configured for this environment.", statusCode: 503);
                 if (websitePayment.Status == PaymentStatus.Paid)
                 {
                     // Reserve the decision before contacting Stripe. Acceptance checks this status in
@@ -158,7 +158,7 @@ public static class OrderQueueEndpoints
                 if (websitePayment.Status != PaymentStatus.RefundPending)
                     return Results.Conflict(new { message = "This payment cannot be refunded automatically. Check Stripe." });
                 var outcome = await WebsiteStripeRefund.EnsureRefundedAsync(clients.CreateClient(), key,
-                    websitePayment.ProviderReference, websitePayment.Id, websitePayment.Amount, ct);
+                    websitePayment.ProviderReference!, websitePayment.Id, websitePayment.Amount, ct, stripeMode.Live);
                 if (outcome != WebsiteStripeRefund.Result.Complete)
                     return Results.Problem(outcome == WebsiteStripeRefund.Result.Pending
                         ? "The refund is still being confirmed. The order cannot be accepted; retry decline shortly."

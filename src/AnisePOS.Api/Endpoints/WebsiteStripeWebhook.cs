@@ -13,16 +13,17 @@ public static class WebsiteStripeWebhook
     private static readonly JsonSerializerOptions SnapshotOptions = new() { PropertyNameCaseInsensitive = true };
     public sealed record PaidSession(string SessionId, long AmountPence, string Currency, Guid CheckoutId);
 
-    // Only paid, test-mode Checkout Sessions are eligible to reach the kitchen.
-    public static PaidSession? ReadPaidSession(JsonElement root)
+    // Only paid Checkout Sessions from the configured environment reach the kitchen.
+    public static PaidSession? ReadPaidSession(JsonElement root, bool liveMode = false)
     {
         if (!root.TryGetProperty("type", out var type) || type.ValueKind != JsonValueKind.String ||
             type.GetString() is not ("checkout.session.completed" or "checkout.session.async_payment_succeeded") ||
-            !root.TryGetProperty("livemode", out var live) || live.ValueKind != JsonValueKind.False ||
+            !root.TryGetProperty("livemode", out var live) || live.ValueKind != (liveMode ? JsonValueKind.True : JsonValueKind.False) ||
             !root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object ||
             !data.TryGetProperty("object", out var session) || session.ValueKind != JsonValueKind.Object ||
             !session.TryGetProperty("object", out var objectType) || objectType.ValueKind != JsonValueKind.String || objectType.GetString() != "checkout.session" ||
-            !session.TryGetProperty("id", out var id) || id.ValueKind != JsonValueKind.String || id.GetString() is not string sessionId || !sessionId.StartsWith("cs_test_", StringComparison.Ordinal) ||
+            !session.TryGetProperty("livemode", out var sessionLive) || sessionLive.ValueKind != (liveMode ? JsonValueKind.True : JsonValueKind.False) ||
+            !session.TryGetProperty("id", out var id) || id.ValueKind != JsonValueKind.String || id.GetString() is not string sessionId || !sessionId.StartsWith(liveMode ? "cs_live_" : "cs_test_", StringComparison.Ordinal) ||
             !session.TryGetProperty("payment_status", out var status) || status.ValueKind != JsonValueKind.String || status.GetString() != "paid" ||
             !session.TryGetProperty("currency", out var currency) || currency.ValueKind != JsonValueKind.String || currency.GetString() != "gbp" ||
             !session.TryGetProperty("amount_total", out var amount) || amount.ValueKind != JsonValueKind.Number || !amount.TryGetInt64(out var pence) || pence < 30 ||
@@ -33,11 +34,12 @@ public static class WebsiteStripeWebhook
 
     public static void MapWebsiteStripeWebhook(this IEndpointRouteBuilder app)
     {
-        app.MapPost("/api/webhooks/stripe/website", async (HttpRequest request, IConfiguration config,
+        app.MapPost("/api/webhooks/stripe/website", async (HttpRequest request, IConfiguration config, IHostEnvironment environment,
             AniseDbContext db, ILoggerFactory loggerFactory, CancellationToken ct) =>
         {
             var secret = config["WebsiteCheckout:StripeWebhookSecret"];
-            if (string.IsNullOrWhiteSpace(secret)) return Results.Problem("Webhook is not configured.", statusCode: 503);
+            var stripeMode = WebsiteStripeMode.From(config, environment);
+            if (stripeMode is null || string.IsNullOrWhiteSpace(secret)) return Results.Problem("Webhook is not configured.", statusCode: 503);
             using var reader = new StreamReader(request.Body, new UTF8Encoding(false, true), detectEncodingFromByteOrderMarks: false);
             string payload;
             try { payload = await reader.ReadToEndAsync(ct); }
@@ -53,18 +55,25 @@ public static class WebsiteStripeWebhook
                 if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("type", out var type) || type.ValueKind != JsonValueKind.String)
                     return Results.BadRequest();
                 if (type.GetString() is not ("checkout.session.completed" or "checkout.session.async_payment_succeeded")) return Results.Ok();
-                var paid = ReadPaidSession(root);
+                var paid = ReadPaidSession(root, stripeMode.Live);
                 if (paid is null)
                 {
                     // An unpaid completed session is not fulfilled; a later paid event may follow.
-                    if (root.TryGetProperty("livemode", out var live) && live.ValueKind == JsonValueKind.False &&
+                    if (root.TryGetProperty("livemode", out var live) && live.ValueKind == (stripeMode.Live ? JsonValueKind.True : JsonValueKind.False) &&
                         root.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Object &&
                         data.TryGetProperty("object", out var obj) && obj.ValueKind == JsonValueKind.Object &&
                         obj.TryGetProperty("payment_status", out var status) && status.ValueKind == JsonValueKind.String &&
                         status.GetString() == "unpaid") return Results.Ok();
                     return Results.BadRequest();
                 }
-                var logger = loggerFactory.CreateLogger("WebsiteStripeWebhook");
+                return await FulfilPaidSessionAsync(paid, db, loggerFactory.CreateLogger("WebsiteStripeWebhook"), ct);
+            }
+        }).WithMetadata(new RequestSizeLimitAttribute(256 * 1024));
+    }
+
+
+    public static async Task<IResult> FulfilPaidSessionAsync(PaidSession paid, AniseDbContext db, ILogger logger, CancellationToken ct)
+    {
                 await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
                 var checkout = await db.WebsiteCheckouts.SingleOrDefaultAsync(c => c.Id == paid.CheckoutId, ct);
                 if (checkout is null || checkout.StripeSessionId != paid.SessionId || checkout.Total * 100m != paid.AmountPence)
@@ -102,12 +111,10 @@ public static class WebsiteStripeWebhook
                     db.PromoRedemptions.Add(new PromoRedemption { Code = snapshot.PromoCode, Phone = PromoCodes.NormalizePhone(snapshot.CustomerPhone), OrderId = order.Id });
                 if (!string.IsNullOrEmpty(snapshot.ProtectedConfirmation))
                     db.WebsiteConfirmations.Add(new WebsiteConfirmation { Order = order, ProtectedPayload = snapshot.ProtectedConfirmation });
-                checkout.CompletedOrderId = order.Id; checkout.UpdatedAtUtc = now;
+                checkout.CompletedOrderId = order.Id; checkout.ReconciliationError = null; checkout.UpdatedAtUtc = now;
                 await db.SaveChangesAsync(ct);
                 await transaction.CommitAsync(ct);
                 return Results.Ok();
-            }
-        }).WithMetadata(new RequestSizeLimitAttribute(256 * 1024));
     }
 
     private sealed record CheckoutSnapshot(OrderType OrderType, string? CustomerName, string? CustomerPhone,

@@ -8,5 +8,6 @@
   "007_product_chinese_name.sql": "0a5f444413d67ebdc15a9a6287f1c5d9b722e82528f64096fc8cb20a141bd0b7",
   "008_product_images.sql": "5d0df4e79265efa4c27966e0f40c4e7762e6dc6b48b75697885b72b7a8d9cf50",
   "009_category_product_order.sql": "aa6b032adbc821610b53f5e7f42f8012de1e44bbaec7f80ff5376420fdd9f67a",
-  "010_order_lifecycle.sql": "6b8bda54f01669104f3bad0f8dcadedfa0e4f9f280c7d520963c0b278b005d7f"
+  "010_order_lifecycle.sql": "6b8bda54f01669104f3bad0f8dcadedfa0e4f9f280c7d520963c0b278b005d7f",
+  "011_website_stripe_reconciliation.sql": "1c35e31d69573ef0f080ae60a847557fc307a1fe20063e43e909d4282574866a"
 }

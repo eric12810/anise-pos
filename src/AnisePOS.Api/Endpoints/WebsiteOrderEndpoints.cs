@@ -95,22 +95,23 @@ public static class WebsiteOrderEndpoints
                 : Results.Ok(new { promo.Percent, promo.MinimumSubtotal });
         }).RequireCors("PublicWebsiteCheckout").RequireRateLimiting("website-checkout");
 
-        app.MapPost("/api/website/card-availability", (IConfiguration config) =>
-            Results.Ok(new { available = CardCheckoutConfigured(config) }))
+        app.MapPost("/api/website/card-availability", (IConfiguration config, IHostEnvironment environment) =>
+            Results.Ok(new { available = CardCheckoutConfigured(config, environment) }))
             .RequireCors("PublicWebsiteCheckout").RequireRateLimiting("website-status");
 
         // Card checkout remains test-only until explicitly configured and verified.
         app.MapPost("/api/website/stripe-checkout", async (WebsiteCashOrder request, AniseDbContext db,
-            IConfiguration config, IHttpClientFactory clients, IDataProtectionProvider protection, CancellationToken ct) =>
+            IConfiguration config, IHostEnvironment environment, IHttpClientFactory clients, IDataProtectionProvider protection, CancellationToken ct) =>
         {
-            if (!CardCheckoutConfigured(config))
+            var stripeMode = WebsiteStripeMode.From(config, environment);
+            if (!CardCheckoutConfigured(config, environment) || stripeMode is null)
                 return Results.Problem("Card checkout is not available yet.", statusCode: 503);
             var secret = config["Stripe:SecretKey"];
             var successUrl = config["WebsiteCheckout:StripeSuccessUrl"];
             var cancelUrl = config["WebsiteCheckout:StripeCancelUrl"];
-            if (secret is null || !secret.StartsWith("sk_test_", StringComparison.Ordinal) ||
+            if (secret is null ||
                 !ValidCheckoutReturnUrl(successUrl) || !ValidCheckoutReturnUrl(cancelUrl))
-                return Results.Problem("Stripe test checkout is not configured.", statusCode: 503);
+                return Results.Problem("Stripe checkout is not configured.", statusCode: 503);
             if (!string.IsNullOrWhiteSpace(request.Email) && !GmailConfirmationSender.ValidAddress(request.Email.Trim()))
                 return Results.BadRequest(new { message = "Enter a valid email address for your order confirmation." });
             if (request.RequestId == Guid.Empty || request.Lines is null || request.Lines.Count is < 1 or > 50 ||
@@ -123,7 +124,8 @@ public static class WebsiteOrderEndpoints
             var checkout = await db.WebsiteCheckouts.SingleOrDefaultAsync(x => x.RequestId == request.RequestId, ct);
             if (checkout is not null && checkout.RequestHash != requestHash)
                 return Results.Conflict(new { message = "This checkout reference belongs to a different order." });
-            if (checkout?.StripeSessionUrl is not null) return Results.Ok(new { url = checkout.StripeSessionUrl });
+            if (checkout?.StripeSessionUrl is not null)
+                return stripeMode.MatchesSession(checkout.StripeSessionId) ? Results.Ok(new { url = checkout.StripeSessionUrl }) : Results.Conflict(new { message = "Checkout payment mode does not match this environment." });
             if (checkout is null)
             {
             var availability = OrderingAvailability.Evaluate(await OrderingAvailability.Get(db, ct), DateTimeOffset.UtcNow);
@@ -221,7 +223,8 @@ public static class WebsiteOrderEndpoints
             }
             if (checkout.RequestHash != requestHash)
                 return Results.Conflict(new { message = "This checkout reference belongs to a different order." });
-            if (checkout.StripeSessionUrl is not null) return Results.Ok(new { url = checkout.StripeSessionUrl });
+            if (checkout.StripeSessionUrl is not null)
+                return stripeMode.MatchesSession(checkout.StripeSessionId) ? Results.Ok(new { url = checkout.StripeSessionUrl }) : Results.Conflict(new { message = "Checkout payment mode does not match this environment." });
             try
             {
                 using var stripeRequest = new HttpRequestMessage(HttpMethod.Post, "https://api.stripe.com/v1/checkout/sessions");
@@ -243,7 +246,7 @@ public static class WebsiteOrderEndpoints
                 using var json = System.Text.Json.JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
                 var id = json.RootElement.GetProperty("id").GetString();
                 var url = json.RootElement.GetProperty("url").GetString();
-                if (id is null || !id.StartsWith("cs_test_", StringComparison.Ordinal) || !Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != "https" || uri.Host != "checkout.stripe.com")
+                if (!stripeMode.MatchesSession(id) || !Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != "https" || uri.Host != "checkout.stripe.com")
                     return Results.Problem("Stripe returned an unexpected response.", statusCode: 502);
                 checkout.StripeSessionId = id; checkout.StripeSessionUrl = url; checkout.UpdatedAtUtc = DateTimeOffset.UtcNow;
                 await db.SaveChangesAsync(ct);
@@ -363,14 +366,13 @@ public static class WebsiteOrderEndpoints
     }
     public sealed record OfferQuoteRequest(OrderType OrderType, string? Phone, decimal DeliveryFee, List<WebsiteOrderLine> Lines, string? PromoCode = null, bool IsReturningCustomer = false);
     public sealed record PromoQuoteRequest(string? Code);
-    private static bool CardCheckoutConfigured(IConfiguration config) =>
+    private static bool CardCheckoutConfigured(IConfiguration config, IHostEnvironment environment) =>
         config.GetValue("WebsiteCheckout:StripeSessionsEnabled", false) &&
-        (config["Stripe:SecretKey"]?.StartsWith("sk_test_", StringComparison.Ordinal) ?? false) &&
-        (config["WebsiteCheckout:StripeWebhookSecret"]?.StartsWith("whsec_", StringComparison.Ordinal) ?? false) &&
+        WebsiteStripeMode.From(config, environment) is not null &&
         ValidCheckoutReturnUrl(config["WebsiteCheckout:StripeSuccessUrl"]) && ValidCheckoutReturnUrl(config["WebsiteCheckout:StripeCancelUrl"]);
     private static bool ValidCheckoutReturnUrl(string? value) =>
         Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Scheme == "https" &&
-        (uri.Host == "www.loveanise.co.uk" || uri.Host == "loveanise.co.uk" || uri.Host == "staging.anise.dotnetcloud.co.uk") && uri.IsDefaultPort && string.IsNullOrEmpty(uri.UserInfo) && string.IsNullOrEmpty(uri.Fragment);
+            (uri.Host == "www.loveanise.co.uk" || uri.Host == "loveanise.co.uk" || uri.Host == "www.staging.loveanise.co.uk" || uri.Host == "staging.loveanise.co.uk") && uri.IsDefaultPort && string.IsNullOrEmpty(uri.UserInfo) && string.IsNullOrEmpty(uri.Fragment);
     public sealed record DeliveryQuoteRequest(string? Postcode);
     public sealed record WebsiteStatusRequest(Guid RequestId);
     public sealed record WebsiteCashOrder(Guid RequestId, OrderType OrderType, string Name, string Phone,
