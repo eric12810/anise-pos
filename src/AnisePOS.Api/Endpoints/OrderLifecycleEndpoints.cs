@@ -75,6 +75,15 @@ public static class OrderLifecycleEndpoints
             db.OrderStatusHistory.Add(new OrderStatusHistory { OrderId = refund.OrderId, Status = refund.Order.Status, CreatedAtUtc = now, ChangedBy = staff.FindFirstValue(ClaimTypes.NameIdentifier), Note = $"Refund completed: £{refund.Amount:0.00}" });
             await db.SaveChangesAsync(ct); return Results.Ok(new { refund.Id, refund.Status });
         });
+        orders.MapPut("/{orderNumber:long}/refunds/{refundId:guid}/fail", async (long orderNumber, Guid refundId, AniseDbContext db, ClaimsPrincipal staff, CancellationToken ct) =>
+        {
+            var refund = await db.Refunds.Include(r => r.Order).SingleOrDefaultAsync(r => r.Id == refundId && r.Order.OrderNumber == orderNumber, ct);
+            if (refund is null) return Results.NotFound();
+            if (refund.Status != RefundStatus.Pending) return Results.Conflict(new { message = "Only pending refunds can be marked failed." });
+            var now = DateTimeOffset.UtcNow; refund.Status = RefundStatus.Failed; refund.UpdatedAtUtc = now;
+            db.OrderStatusHistory.Add(new OrderStatusHistory { OrderId = refund.OrderId, Status = refund.Order.Status, CreatedAtUtc = now, ChangedBy = staff.FindFirstValue(ClaimTypes.NameIdentifier), Note = $"Refund failed or abandoned: £{refund.Amount:0.00}" });
+            await db.SaveChangesAsync(ct); return Results.Ok(new { refund.Id, refund.Status });
+        });
     }
 }
 
