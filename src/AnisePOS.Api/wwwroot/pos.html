@@ -137,7 +137,24 @@ function printerContent(order){ return receiptPrinterContent(order); }
     }
     document.querySelector('#place').onclick=async()=>{const notice=document.querySelector('#notice'),place=document.querySelector('#place'),postcode=state.deliveryAddress.postcode.trim().toUpperCase(),streetAddress=document.querySelector('#delivery-address').value.trim(),streetAddress2=document.querySelector('#delivery-address-2').value.trim(),deliveryAddress=state.type==='Delivery'?[postcode,streetAddress,streetAddress2].filter(Boolean).join('\n'):null,deliveryFee=state.type==='Delivery'?Math.max(0,Number(document.querySelector('#delivery-fee').value)||0):0,customFee=Math.max(0,Number(document.querySelector('#custom-fee').value)||0),customFeeDescription=document.querySelector('#custom-fee-description').value.trim();state.deliveryAddress={postcode,line1:streetAddress,line2:streetAddress2};notice.className='';if(state.type==='Delivery'&&(!deliveryQuote||deliveryQuote.postcode!==postcode||!deliveryQuote.eligible||deliveryQuote.requiresApproval)&&!document.querySelector('#delivery-fee-override').checked){notice.textContent='Delivery quote unavailable, outside the configured area, or requires staff approval. Tick manual override to proceed.';return}notice.textContent='Placing order…';place.disabled=true;let createdOrder=null,printResult=null;try{const response=await fetch('/api/orders',{method:'POST',headers:{'Content-Type':'application/json'},signal:AbortSignal.timeout(20000),body:JSON.stringify({orderType:state.type,paymentMethod:state.payment,customerName:document.querySelector('#customer-name').value,customerPhone:document.querySelector('#customer-phone').value,deliveryAddress,notes:document.querySelector('#notes').value,deliveryFee,customFeeDescription,customFee,estimatedMinutes:Number(document.querySelector('#estimate-minutes').value),source:'iPad POS',lines:state.cart.map(l=>({variantId:l.variantId,quantity:l.qty,modifierIds:l.mods.map(m=>m.id),notes:l.instructions||null}))})});if(!response.ok){let detail='Could not place the order.';try{const body=await response.json();detail=body.message||body.detail||body.title||Object.values(body.errors||{}).flat().join(' ')||detail}catch{}notice.textContent=detail+' Check the order details and try again.';return}const order=await response.json();createdOrder=order;printResult=autoPrintReceipt(order.orderNumber);updateEstimateOptions();state.cart=[];document.querySelector('#delivery-fee').value='0.00';document.querySelector('#delivery-fee-override').checked=false;invalidateDeliveryQuote();document.querySelector('#custom-fee').value='0.00';document.querySelector('#custom-fee-description').value='';renderCart();['customer-name','customer-phone','delivery-address','delivery-address-2','notes'].forEach(id=>document.querySelector('#'+id).value='');state.deliveryAddress={postcode:'',line1:'',line2:''};setPostcodeSearchValue('',false);const addressSelect=document.querySelector('#address-select');addressSelect.innerHTML='<option value="">Choose an address</option>';addressSelect._addresses=[];document.querySelector('#address-results').hidden=true;document.querySelector('#address-lookup-status').textContent='';document.querySelector('#phone-lookup-status').textContent='';notice.className='success';notice.textContent=`Order #${order.orderNumber} created — ${money(order.total)}.`}catch(error){notice.textContent=createdOrder?`Order #${createdOrder.orderNumber}: order created. Check the order queue for details.`:'The order service did not respond. Check the order queue before placing the order again.';}finally{if(printResult){const ok=await printResult;notice.textContent+=ok?' · Two receipts sent to printer.':' · Printing could not be confirmed. Check the printer before reprinting from the order queue.';}place.disabled=!state.cart.length;}}; load();
     let routeVersion=0,selectedPlace=null,googleMapsPromise;
-    async function loadGoogleMaps(){if(googleMapsPromise)return googleMapsPromise;googleMapsPromise=fetch('/api/orders/google-maps-config',{credentials:'same-origin',cache:'no-store'}).then(r=>{if(!r.ok)throw new Error('Google Maps configuration request failed ('+r.status+').');return r.json()}).then(c=>new Promise((ok,no)=>{if(!c.browserKey)return no(new Error('Google Maps browser key is not configured on staging.'));const s=document.createElement('script');s.src='https://maps.googleapis.com/maps/api/js?key='+encodeURIComponent(c.browserKey)+'&libraries=places&loading=async&v=weekly';s.onload=ok;s.onerror=()=>no(new Error('Google Maps JavaScript API could not be loaded. Check the browser-key restrictions and enabled APIs.'));document.head.append(s)}));return googleMapsPromise}
+    async function loadGoogleMaps(){
+      if(googleMapsPromise)return googleMapsPromise;
+      googleMapsPromise=fetch('/api/orders/google-maps-config',{credentials:'same-origin',cache:'no-store'})
+        .then(r=>{if(!r.ok)throw new Error('Google Maps configuration request failed (HTTP '+r.status+').');return r.json()})
+        .then(c=>new Promise((resolve,reject)=>{
+          if(!c.browserKey)return reject(new Error('Google Maps browser key is not configured.'));
+          const callback='__aniseGoogleMapsReady';
+          const script=document.createElement('script');
+          let timeout;
+          const finish=(error)=>{clearTimeout(timeout);delete window[callback];if(error)reject(error);else resolve()};
+          window[callback]=()=>finish(typeof window.google?.maps?.importLibrary==='function'?null:new Error('Google Maps loaded without importLibrary.'));
+          script.src='https://maps.googleapis.com/maps/api/js?key='+encodeURIComponent(c.browserKey)+'&libraries=places&loading=async&v=weekly&callback='+callback;
+          script.onerror=()=>finish(new Error('Google Maps JavaScript API failed to load.'));
+          timeout=setTimeout(()=>finish(new Error('Google Maps JavaScript API did not become ready.')),15000);
+          document.head.append(script);
+        }));
+      return googleMapsPromise;
+    }
     async function renderRouteMap(dialog,routeData){
       const {Map}=await google.maps.importLibrary('maps');
       const {encoding}=await google.maps.importLibrary('geometry');
@@ -167,10 +184,13 @@ function printerContent(order){ return receiptPrinterContent(order); }
     manualPostcode.addEventListener('input',onPostcodeInput);
     manualPostcode.addEventListener('blur',postcodeBlurred);
     async function initialisePlaceSearch(){
+      let stage='Maps configuration or loading';
       try{
         await loadGoogleMaps();
+        stage='Places library';
         const {PlaceAutocompleteElement}=await google.maps.importLibrary('places');
         if(!PlaceAutocompleteElement)throw new Error('Places autocomplete is unavailable.');
+        stage='autocomplete widget';
         const widget=new PlaceAutocompleteElement();
         widget.id='place-autocomplete';
         widget.includedRegionCodes=['gb'];
@@ -179,7 +199,7 @@ function printerContent(order){ return receiptPrinterContent(order); }
         widget.addEventListener('focus',postcodeFocused);
         widget.addEventListener('blur',postcodeBlurred);
         widget.addEventListener('input',onPostcodeInput);
-        widget.addEventListener('gmp-error',()=>{manualPostcode.value=widget.value||'';manualPostcode.hidden=false;widget.replaceWith(manualPostcode);postcodeSearch=manualPostcode;placesStatus.textContent='Google address suggestions are unavailable. Enter the postcode and address manually.'});
+        widget.addEventListener('gmp-error',event=>{const code=String(event.error?.code||'').replace(/[^A-Za-z0-9_-]/g,'').slice(0,60);console.error('Google Places widget error',code||'unspecified');manualPostcode.value=widget.value||'';manualPostcode.hidden=false;widget.replaceWith(manualPostcode);postcodeSearch=manualPostcode;placesStatus.textContent='Google Places search failed'+(code?' ('+code+')':'')+'. Enter the postcode and address manually.'});
         widget.addEventListener('gmp-select',async event=>{
           postcodeSelectionPending=true;
           clearTimeout(postcodeBlurTimer);
@@ -203,9 +223,11 @@ function printerContent(order){ return receiptPrinterContent(order); }
         manualPostcode.replaceWith(widget);
         postcodeSearch=widget;
       }catch(error){
+        const message=String(error?.message||'Unknown initialization error').replace(/https?:\/\/[^\s)]+/gi,'[URL redacted]').replace(/AIza[\w-]+/g,'[redacted]').replace(/key=[^&\s]+/gi,'key=[redacted]');
+        console.error('Google Places initialization failed at '+stage+':',String(error?.name||'Error'),message);
         manualPostcode.hidden=false;
         postcodeSearch=manualPostcode;
-        placesStatus.textContent='Google address suggestions are unavailable. Enter the postcode and address manually.';
+        placesStatus.textContent=(stage==='Maps configuration or loading'?message:'Google Places failed to initialise ('+stage+').')+' Enter the postcode and address manually.';
       }
     }
     initialisePlaceSearch();
