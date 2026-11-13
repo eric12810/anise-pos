@@ -39,7 +39,7 @@ public static class OrderLifecycleEndpoints
         {
             var order = await db.Orders.Include(o => o.Payments).Include(o => o.Refunds).SingleOrDefaultAsync(o => o.OrderNumber == orderNumber, ct);
             if (order is null) return Results.NotFound();
-            if (order.Status != OrderStatus.Completed) return Results.Conflict(new { message = "Only completed orders can be refunded." });
+            if (order.Status is not OrderStatus.Completed and not OrderStatus.Cancelled) return Results.Conflict(new { message = "Only completed or cancelled orders can be refunded." });
             var paid = order.Payments.Where(p => p.Status is PaymentStatus.Paid or PaymentStatus.PartiallyRefunded).Sum(p => p.Amount);
             var refunded = order.Refunds.Where(r => r.Status is RefundStatus.Pending or RefundStatus.Completed).Sum(r => r.Amount);
             var remaining = paid - refunded;
