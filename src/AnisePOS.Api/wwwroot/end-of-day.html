@@ -22,8 +22,14 @@
     const xmlEscape=value=>String(value??'').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g,'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     let endOfDayPrintData=null;
 
-    function reportRow(label,value,className=''){
-      return `<div class="row ${className}"><span>${htmlEscape(label)}</span><span>${currency.format(value)}</span></div>`;
+    const nonZero=value=>{const numeric=typeof value==='number'?value:Number(String(value).replace(/[^0-9.-]/g,''));return Number.isFinite(numeric)&&numeric!==0};
+    function reportRow(label,value,className='',format=currency){
+      return nonZero(value)?`<div class="row ${className}"><span>${htmlEscape(label)}</span><span>${format.format(value)}</span></div>`:'';
+    }
+    const countFormat=new Intl.NumberFormat('en-GB',{maximumFractionDigits:0});
+    function reportSection(label,rows){
+      const content=rows.join('');
+      return content?`<section class="section"><h3>${htmlEscape(label)}</h3>${content}</section>`:'';
     }
 
     async function getPrinterAddress(){
@@ -48,14 +54,15 @@
         parts.push(`<image width="${width}" height="${height}" color="color_1" mode="mono">${btoa(bytes)}</image>`);
       }
       function centred(value,size=30,bold=false){image(Math.ceil(size*1.35)+6,context=>{context.font=font(size,bold);context.textAlign='center';context.textBaseline='top';context.fillText(value,width/2,2)})}
-      function row(label,value,bold=false){image(45,context=>{context.font=font(30,bold);context.textBaseline='top';context.fillText(label,margin,2);context.textAlign='right';context.fillText(value,width-margin,2)})}
+      function row(label,value,bold=false){if(!nonZero(value))return;image(45,context=>{context.font=font(30,bold);context.textBaseline='top';context.fillText(label,margin,2);context.textAlign='right';context.fillText(value,width-margin,2)})}
       function section(label){image(56,context=>{context.fillRect(0,10,width,40);context.fillStyle='#fff';context.font=font(29,true);context.textBaseline='middle';context.fillText(label.toUpperCase(),margin,30)})}
       function space(height=14){image(height,()=>{})}
       centred('ANISE',40,true);centred('END OF DAY',34,true);centred(date,27);space(12);
-      section('AnisePOS');row('Gross sales',currency.format(report.grossSales));row('Paid before refunds',currency.format(report.paidSales));row('Cash refunds',currency.format(report.completedCashRefunds));row('Card refunds',currency.format(report.completedCardRefunds));row('Total refunds',currency.format(report.completedRefunds));row('Net POS takings',currency.format(report.netPaidTakings),true);row('Cash paid',currency.format(report.cashSales));row('Card paid',currency.format(report.cardSales));if(report.pendingRefunds)row('Pending refunds',currency.format(report.pendingRefunds));if(report.pendingSales)row('Awaiting payment',currency.format(report.pendingSales));row('Order count',String(report.orderCount));space();
-      section('Delivery platforms');row('Uber Eats',currency.format(platforms.uberEats));row('Just Eat Card',currency.format(platforms.justEatCard));row('Deliveroo',currency.format(platforms.deliveroo));row('Just Eat Cash',currency.format(platforms.justEatCash));row('Platform total',currency.format(platformTotal),true);space();
-      section('Cash up');row('Combined cash total',currency.format(combinedCash),true);space();
-      image(16,context=>context.fillRect(margin,7,width-2*margin,2));row('TOTAL TAKINGS',currency.format(combined),true);space(28);
+      const posValues=[report.cashSales,report.cardSales,report.completedRefunds,report.orderCount,report.collectionOrders,report.deliveryOrders,report.netPaidTakings];
+      if(posValues.some(nonZero)){section('AnisePOS');row('Cash',currency.format(report.cashSales));row('Card',currency.format(report.cardSales));row('Refund',currency.format(report.completedRefunds));row('Order',countFormat.format(report.orderCount));row('Collection',countFormat.format(report.collectionOrders));row('Delivery',countFormat.format(report.deliveryOrders));row('POS Total',currency.format(report.netPaidTakings),true);space()}
+      if(Object.values(platforms).some(nonZero)){section('Delivery platforms');row('Uber Eats',currency.format(platforms.uberEats));row('Just Eat Card',currency.format(platforms.justEatCard));row('Deliveroo',currency.format(platforms.deliveroo));row('Just Eat Cash',currency.format(platforms.justEatCash));row('Platform total',currency.format(platformTotal),true);space()}
+      if(nonZero(combinedCash)){section('Cash up');row('Combined cash total',currency.format(combinedCash),true);space()}
+      if(nonZero(combined)){image(16,context=>context.fillRect(margin,7,width-2*margin,2));row('TOTAL TAKINGS',currency.format(combined),true);space(28)}
       parts.push('<text>\n\n\n</text><cut type="feed"/>');
       return parts.join('');
     }
@@ -100,7 +107,7 @@
         endOfDayPrintData={date,report,platforms};
         printButton.disabled=false;
         document.title='Anise — End of day '+input.date;
-        reportTarget.innerHTML=`<h1>ANISE</h1><h2>END OF DAY</h2><p class="meta">${date}</p><section class="section"><h3>AnisePOS</h3>${reportRow('Gross sales',report.grossSales)}${reportRow('Paid before refunds',report.paidSales)}${reportRow('Completed cash refunds',report.completedCashRefunds)}${reportRow('Completed card refunds',report.completedCardRefunds)}${reportRow('Total completed refunds',report.completedRefunds)}${reportRow('Net POS takings',report.netPaidTakings)}${reportRow('Cash paid',report.cashSales,'subtle')}${reportRow('Card paid',report.cardSales,'subtle')}${reportRow('Pending refunds',report.pendingRefunds,'subtle')}${report.pendingSales?reportRow('Awaiting payment',report.pendingSales):''}<div class="row subtle"><span>Order count</span><span>${report.orderCount}</span></div></section><section class="section"><h3>Delivery platforms (manual figures, unchanged)</h3>${reportRow('Uber Eats',platforms.uberEats)}${reportRow('Just Eat Card',platforms.justEatCard)}${reportRow('Deliveroo',platforms.deliveroo)}${reportRow('Just Eat Cash',platforms.justEatCash)}${reportRow('Platform total',platformTotal)}</section><section class="section"><h3>Cash up</h3>${reportRow('Combined cash total',combinedCash,'grand')}</section><section class="section">${reportRow('Total recorded takings',combined,'grand')}</section>${report.pendingSales?`<p class="warning">${currency.format(report.pendingSales)} of AnisePOS orders are still awaiting payment and are not included in total recorded takings.</p>`:''}<p class="footer">Printed ${new Date().toLocaleString('en-GB')}</p>`;
+        reportTarget.innerHTML=`<h1>ANISE</h1><h2>END OF DAY</h2><p class="meta">${date}</p>${reportSection('AnisePOS',[reportRow('Cash',report.cashSales,'',currency),reportRow('Card',report.cardSales,'',currency),reportRow('Refund',report.completedRefunds,'',currency),reportRow('Order',report.orderCount,'',countFormat),reportRow('Collection',report.collectionOrders,'',countFormat),reportRow('Delivery',report.deliveryOrders,'',countFormat),reportRow('POS Total',report.netPaidTakings,'grand',currency)])}${reportSection('Delivery platforms (manual figures, unchanged)',[reportRow('Uber Eats',platforms.uberEats),reportRow('Just Eat Card',platforms.justEatCard),reportRow('Deliveroo',platforms.deliveroo),reportRow('Just Eat Cash',platforms.justEatCash),reportRow('Platform total',platformTotal)])}${reportSection('Cash up',[reportRow('Combined cash total',combinedCash,'grand')])}${nonZero(combined)?`<section class="section">${reportRow('Total recorded takings',combined,'grand')}</section>`:''}<p class="footer">Printed ${new Date().toLocaleString('en-GB')}</p>`;
       }catch{reportTarget.innerHTML='<p class="error">Could not load the AnisePOS totals for this date.</p>'}
     })();
   </script>
