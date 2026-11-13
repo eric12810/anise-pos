@@ -347,7 +347,8 @@ public static class CommerceEndpoints
                 .Select(o => new OrderHistoryItemResponse(o.OrderNumber, o.CreatedAtUtc, o.OrderType, o.Status,
                     o.CustomerName, o.CustomerPhone, o.Total, o.Lines.Sum(l => l.Quantity),
                     o.Payments.OrderByDescending(p => p.CreatedAtUtc)
-                        .Select(p => new ReceiptPaymentResponse(p.Method, p.Status)).FirstOrDefault()))
+                        .Select(p => new ReceiptPaymentResponse(p.Method, p.Status)).FirstOrDefault(),
+                    o.Refunds.Where(r => r.Status == RefundStatus.Completed).Sum(r => r.Amount)))
                 .ToListAsync();
             return Results.Ok(new OrderHistoryResponse(items, page, pageSize, totalCount));
         });
@@ -605,7 +606,7 @@ public sealed record DrivingRouteResponse(long DistanceMetres, double DistanceMi
 public sealed record OrderHistoryResponse(List<OrderHistoryItemResponse> Items, int Page, int PageSize, int TotalCount);
 public sealed record OrderHistoryItemResponse(long OrderNumber, DateTimeOffset CreatedAtUtc, OrderType OrderType,
     OrderStatus Status, string? CustomerName, string? CustomerPhone, decimal Total, int ItemCount,
-    ReceiptPaymentResponse? Payment);
+    ReceiptPaymentResponse? Payment, decimal CompletedRefunds);
 public sealed record MenuImportRequest(List<MenuImportCategory> Categories);
 public sealed record MenuImportCategory(string Name, List<MenuImportProduct> Products);
 public sealed record MenuImportProduct(string Name, decimal Price, string? Description);

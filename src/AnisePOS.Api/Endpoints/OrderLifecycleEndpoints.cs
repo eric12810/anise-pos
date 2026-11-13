@@ -57,14 +57,14 @@ public static class OrderLifecycleEndpoints
             var paid = order.Payments.Where(p => p.Status is PaymentStatus.Paid or PaymentStatus.PartiallyRefunded or PaymentStatus.Refunded).Sum(p => p.Amount);
             var refunded = order.Refunds.Where(r => r.Status is RefundStatus.Pending or RefundStatus.Completed).Sum(r => r.Amount);
             var remaining = paid - refunded;
-            if (request.Amount <= 0 || request.Amount > remaining) return Results.BadRequest(new { message = $"Refund must be between £0.01 and {remaining:0.00}.", remainingRefundable = remaining });
+            if (request.Amount <= 0 || decimal.Round(request.Amount, 2) != request.Amount || request.Amount > remaining) return Results.BadRequest(new { message = $"Refund must be between £0.01 and {remaining:0.00}, with no more than two decimal places.", remainingRefundable = remaining });
             if (string.IsNullOrWhiteSpace(request.Reason)) return Results.BadRequest(new { message = "Enter a refund reason." });
             var method = order.Payments.OrderByDescending(p => p.CreatedAtUtc).Select(p => p.Method).FirstOrDefault();
             var now = DateTimeOffset.UtcNow;
-            var refund = new Refund { OrderId = order.Id, Amount = request.Amount, Method = request.Method ?? method, Reason = request.Reason.Trim(), Status = RefundStatus.Pending, ProviderReference = request.ProviderReference?.Trim(), Note = request.Note?.Trim() };
+            var refund = new Refund { OrderId = order.Id, Amount = request.Amount, Method = request.Method ?? method, Reason = request.Reason.Trim(), Status = RefundStatus.Completed, CompletedAtUtc = now, ProviderReference = request.ProviderReference?.Trim(), Note = request.Note?.Trim() };
             db.Refunds.Add(refund);
-            db.OrderStatusHistory.Add(new OrderStatusHistory { OrderId = order.Id, Status = order.Status, CreatedAtUtc = now, ChangedBy = staff.FindFirstValue(ClaimTypes.NameIdentifier), Note = $"Refund recorded as pending: £{refund.Amount:0.00} ({refund.Reason})" });
-            await db.SaveChangesAsync(ct); await tx.CommitAsync(ct); return Results.Ok(new { refund.Id, refund.Status, refund.Amount, remainingRefundable = remaining - refund.Amount, message = "Refund saved as pending. Confirm it only after the payment provider or cash return is verified." });
+            db.OrderStatusHistory.Add(new OrderStatusHistory { OrderId = order.Id, Status = order.Status, CreatedAtUtc = now, ChangedBy = staff.FindFirstValue(ClaimTypes.NameIdentifier), Note = $"External refund recorded as completed: £{refund.Amount:0.00} ({refund.Reason})" });
+            await db.SaveChangesAsync(ct); await tx.CommitAsync(ct); return Results.Ok(new { refund.Id, refund.Status, refund.Amount, remainingRefundable = remaining - refund.Amount, message = "Refund recorded as completed." });
         });
 
         orders.MapPut("/{orderNumber:long}/refunds/{refundId:guid}/complete", async (long orderNumber, Guid refundId, CompleteRefundRequest request, AniseDbContext db, ClaimsPrincipal staff, CancellationToken ct) =>
