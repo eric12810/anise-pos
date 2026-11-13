@@ -34,28 +34,30 @@
       return data.ipAddress;
     }
 
-    function epsonText(value){return `<text>${xmlEscape(value)}\n</text>`}
     function endOfDayEpsonContent(date,report,platforms){
+      const width=560,margin=10,parts=[];
       const platformTotal=Object.values(platforms).reduce((sum,value)=>sum+value,0);
       const combined=report.paidSales+platformTotal;
-      return [
-        '<text align="center" em="true">ANISE\n</text>',
-        '<text align="center">END OF DAY\n'+xmlEscape(date)+'\n\n</text>',
-        '<text em="true">ANISEPOS\n</text>',
-        epsonText('Gross sales: '+currency.format(report.grossSales)),
-        epsonText('Paid takings: '+currency.format(report.paidSales)),
-        epsonText('Cash paid: '+currency.format(report.cashSales)),
-        epsonText('Card paid: '+currency.format(report.cardSales)),
-        epsonText('Order count: '+report.orderCount),
-        '<text>\n</text><text em="true">DELIVERY PLATFORMS\n</text>',
-        epsonText('Uber Eats: '+currency.format(platforms.uberEats)),
-        epsonText('Just Eat Card: '+currency.format(platforms.justEatCard)),
-        epsonText('Deliveroo: '+currency.format(platforms.deliveroo)),
-        epsonText('Just Eat Cash: '+currency.format(platforms.justEatCash)),
-        epsonText('Platform total: '+currency.format(platformTotal)),
-        '<text>\n</text><text em="true">TOTAL RECORDED TAKINGS: '+xmlEscape(currency.format(combined))+'\n</text>',
-        '<text>\n\n\n</text><cut type="feed"/>'
-      ].join('');
+      const combinedCash=report.cashSales+platforms.justEatCash;
+      const font=(size=30,bold=false)=>`${bold?'bold ':''}${size}px sans-serif`;
+      function image(height,draw){
+        const canvas=document.createElement('canvas');canvas.width=width;canvas.height=height;
+        const context=canvas.getContext('2d');context.fillStyle='#fff';context.fillRect(0,0,width,height);context.fillStyle='#000';draw(context);
+        const pixels=context.getImageData(0,0,width,height).data;let bytes='';
+        for(let y=0;y<height;y++)for(let x=0;x<width;x+=8){let byte=0;for(let bit=0;bit<8;bit++)if(pixels[(y*width+x+bit)*4]<160)byte|=128>>bit;bytes+=String.fromCharCode(byte)}
+        parts.push(`<image width="${width}" height="${height}" color="color_1" mode="mono">${btoa(bytes)}</image>`);
+      }
+      function centred(value,size=30,bold=false){image(Math.ceil(size*1.35)+6,context=>{context.font=font(size,bold);context.textAlign='center';context.textBaseline='top';context.fillText(value,width/2,2)})}
+      function row(label,value,bold=false){image(45,context=>{context.font=font(30,bold);context.textBaseline='top';context.fillText(label,margin,2);context.textAlign='right';context.fillText(value,width-margin,2)})}
+      function section(label){image(56,context=>{context.fillRect(0,10,width,40);context.fillStyle='#fff';context.font=font(29,true);context.textBaseline='middle';context.fillText(label.toUpperCase(),margin,30)})}
+      function space(height=14){image(height,()=>{})}
+      centred('ANISE',40,true);centred('END OF DAY',34,true);centred(date,27);space(12);
+      section('AnisePOS');row('Gross sales',currency.format(report.grossSales));row('Paid takings',currency.format(report.paidSales),true);row('Cash paid',currency.format(report.cashSales));row('Card paid',currency.format(report.cardSales));if(report.pendingSales)row('Awaiting payment',currency.format(report.pendingSales));row('Order count',String(report.orderCount));space();
+      section('Delivery platforms');row('Uber Eats',currency.format(platforms.uberEats));row('Just Eat Card',currency.format(platforms.justEatCard));row('Deliveroo',currency.format(platforms.deliveroo));row('Just Eat Cash',currency.format(platforms.justEatCash));row('Platform total',currency.format(platformTotal),true);space();
+      section('Cash up');row('Combined cash total',currency.format(combinedCash),true);space();
+      image(16,context=>context.fillRect(margin,7,width-2*margin,2));row('TOTAL TAKINGS',currency.format(combined),true);space(28);
+      parts.push('<text>\n\n\n</text><cut type="feed"/>');
+      return parts.join('');
     }
 
     async function printEndOfDayToEpson(date,report,platforms){
@@ -94,11 +96,11 @@
         const report=await response.json();
         const platforms={uberEats:Number(input.uberEats)||0,justEatCard:Number(input.justEatCard)||0,deliveroo:Number(input.deliveroo)||0,justEatCash:Number(input.justEatCash)||0};
         const date=new Date(input.date+'T00:00:00').toLocaleDateString('en-GB',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
-        const platformTotal=Object.values(platforms).reduce((sum,value)=>sum+value,0),combined=report.paidSales+platformTotal;
+        const platformTotal=Object.values(platforms).reduce((sum,value)=>sum+value,0),combined=report.paidSales+platformTotal,combinedCash=report.cashSales+platforms.justEatCash;
         endOfDayPrintData={date,report,platforms};
         printButton.disabled=false;
         document.title='Anise — End of day '+input.date;
-        reportTarget.innerHTML=`<h1>ANISE</h1><h2>END OF DAY</h2><p class="meta">${date}</p><section class="section"><h3>AnisePOS</h3>${reportRow('Gross sales',report.grossSales)}${reportRow('Paid takings',report.paidSales)}${reportRow('Cash paid',report.cashSales,'subtle')}${reportRow('Card paid',report.cardSales,'subtle')}${report.pendingSales?reportRow('Awaiting payment',report.pendingSales):''}<div class="row subtle"><span>Order count</span><span>${report.orderCount}</span></div></section><section class="section"><h3>Delivery platforms</h3>${reportRow('Uber Eats',platforms.uberEats)}${reportRow('Just Eat Card',platforms.justEatCard)}${reportRow('Deliveroo',platforms.deliveroo)}${reportRow('Just Eat Cash',platforms.justEatCash)}${reportRow('Platform total',platformTotal)}</section><section class="section">${reportRow('Total recorded takings',combined,'grand')}</section>${report.pendingSales?`<p class="warning">${currency.format(report.pendingSales)} of AnisePOS orders are still awaiting payment and are not included in total recorded takings.</p>`:''}<p class="footer">Printed ${new Date().toLocaleString('en-GB')}</p>`;
+        reportTarget.innerHTML=`<h1>ANISE</h1><h2>END OF DAY</h2><p class="meta">${date}</p><section class="section"><h3>AnisePOS</h3>${reportRow('Gross sales',report.grossSales)}${reportRow('Paid takings',report.paidSales)}${reportRow('Cash paid',report.cashSales,'subtle')}${reportRow('Card paid',report.cardSales,'subtle')}${report.pendingSales?reportRow('Awaiting payment',report.pendingSales):''}<div class="row subtle"><span>Order count</span><span>${report.orderCount}</span></div></section><section class="section"><h3>Delivery platforms</h3>${reportRow('Uber Eats',platforms.uberEats)}${reportRow('Just Eat Card',platforms.justEatCard)}${reportRow('Deliveroo',platforms.deliveroo)}${reportRow('Just Eat Cash',platforms.justEatCash)}${reportRow('Platform total',platformTotal)}</section><section class="section"><h3>Cash up</h3>${reportRow('Combined cash total',combinedCash,'grand')}</section><section class="section">${reportRow('Total recorded takings',combined,'grand')}</section>${report.pendingSales?`<p class="warning">${currency.format(report.pendingSales)} of AnisePOS orders are still awaiting payment and are not included in total recorded takings.</p>`:''}<p class="footer">Printed ${new Date().toLocaleString('en-GB')}</p>`;
       }catch{reportTarget.innerHTML='<p class="error">Could not load the AnisePOS totals for this date.</p>'}
     })();
   </script>

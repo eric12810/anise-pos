@@ -14,6 +14,7 @@ public static class OrderLifecycleEndpoints
         {
             var order = await db.Orders.SingleOrDefaultAsync(o => o.OrderNumber == orderNumber, ct);
             if (order is null) return Results.NotFound();
+            if (string.IsNullOrWhiteSpace(request.Reason)) return Results.BadRequest(new { message = "Choose a cancellation reason." });
             if (order.Status is OrderStatus.Completed or OrderStatus.Cancelled or OrderStatus.Refunded)
                 return Results.Conflict(new { message = "This order cannot be cancelled from its current status." });
             var now = DateTimeOffset.UtcNow;

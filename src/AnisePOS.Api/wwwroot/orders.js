@@ -12,6 +12,8 @@ const soundStatus = document.querySelector('#sound-status');
 const detailDialog = document.querySelector('#order-detail-dialog');
 const detailContent = document.querySelector('#order-detail-content');
 const detailStatus = document.querySelector('#order-detail-status');
+const cancelDialog = document.querySelector('#cancel-dialog'), cancelError = document.querySelector('#cancel-error'), cancelConfirm = document.querySelector('#cancel-confirm');
+let cancellingOrder = null;
 document.querySelector('#order-detail-close').addEventListener('click', () => detailDialog.close());
 detailDialog.addEventListener('close', () => { detailContent.replaceChildren(); load(); });
 new MutationObserver(() => { if (detailDialog.open) detailStatus.textContent = message.textContent; }).observe(message, {childList: true, characterData: true, subtree: true});
@@ -181,12 +183,12 @@ function buildOrderCard(order, id, compact = false) {
 
 async function cancelOrder(order) {
     if (saving) return;
-    const reason = window.prompt('Cancellation reason: Customer Request, Duplicate Order, Item Unavailable or Other', 'Customer Request');
-    if (!reason || !window.confirm('Cancel order #' + order.orderNumber + '? This does not automatically refund a payment.')) return;
-    saving = true;
-    try { await request('/api/orders/' + order.orderNumber + '/cancel', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({reason: reason.trim()})}); closeOrderDetails(); }
-    catch (error) { message.textContent = error.message; } finally { saving = false; }
+    cancellingOrder = order; cancelError.textContent = ''; document.querySelector('#cancel-order-label').textContent = 'Order #' + order.orderNumber + ' will leave the active queue. Payments are not refunded automatically.';
+    document.querySelector('input[name="cancel-reason"][value="Customer Request"]').checked = true; document.querySelector('#cancel-other-input').value = ''; document.querySelector('#cancel-other').hidden = true; cancelDialog.showModal();
 }
+document.querySelectorAll('input[name="cancel-reason"]').forEach(input => input.addEventListener('change', () => { document.querySelector('#cancel-other').hidden = input.value !== 'Other' || !input.checked; }));
+document.querySelector('#cancel-keep').addEventListener('click', () => cancelDialog.close());
+cancelConfirm.addEventListener('click', async () => { if (!cancellingOrder || saving) return; const selected = document.querySelector('input[name="cancel-reason"]:checked').value; const reason = selected === 'Other' ? document.querySelector('#cancel-other-input').value.trim() : selected; if (!reason) { cancelError.textContent = 'Enter a cancellation reason.'; return; } saving = true; cancelConfirm.disabled = true; cancelError.textContent = 'Cancelling order…'; try { await request('/api/orders/' + cancellingOrder.orderNumber + '/cancel', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({reason})}); cancelDialog.close(); closeOrderDetails(); } catch (error) { cancelError.textContent = error.message; } finally { saving = false; cancelConfirm.disabled = false; } });
 
 function updateOverdueCards() {
     const now = Date.now();
