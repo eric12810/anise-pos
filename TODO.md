@@ -69,6 +69,19 @@ _No website-only tasks recorded yet. Add them here as they arise._
   - **Never create live orders, initiate payments, change stock, or write to production data as part of smoke tests.**
   - Validate tests on staging first; report production failures without automatically redeploying or rolling back.
 
+### Emergency hosting and business continuity
+
+- [ ] **Prepare a Mac-based emergency hosting setup for Anise website and POS**
+  - Treat this as a future project **after the core live POS is stable**; first document and test a manual recovery plan, not automatic failover.
+  - Establish how to run the customer website, .NET POS/API and any IIS-dependent components from the Mac (or an appropriately configured Windows/Linux VM), without using staging as a substitute for production.
+  - Assess Cloudflare Tunnel or another secure reverse proxy, independent DNS/traffic routing, HTTPS, internet connectivity, and a controlled manual cutover of the website and POS domains. Do not expose a development server directly to the public internet.
+  - Design a separate **production-safe emergency SQL database** with off-host backups and a tested restoration/replication strategy. Never point public ordering to the staging database or copy production customer, order or payment data into staging.
+  - Define safe outage operation: prevent split-brain ordering; handle unique order IDs, payment callbacks, refunds, customer data, local receipt printing and order acknowledgement without duplicates.
+  - Provide clear activation, health checks, monitoring, customer-facing fallback messaging (including telephone ordering), and recovery/failback steps with reconciliation of emergency orders into production **exactly once**.
+  - Test host outage, database outage, shop internet failure, recovery, duplicate prevention and restoration in an isolated environment before any live use.
+  - Document operational limitations: the Mac must remain powered on; shop-local POS operation may still work without internet, but public website ordering and externally processed card payments require working connectivity and available providers.
+  - **Do not switch production DNS, connect to or modify production databases, or deploy an emergency server publicly without explicit approval.**
+
 ### Dish image optimisation
 
 - [ ] **Automatically generate and store two optimised image versions for each POS dish**
