@@ -2,6 +2,7 @@ using System.Security.Claims;
 using AnisePOS.Api.Data;
 using AnisePOS.Api.Domain;
 using Microsoft.EntityFrameworkCore;
+using System.Data;
 
 namespace AnisePOS.Api.Endpoints;
 
@@ -10,6 +11,18 @@ public static class OrderLifecycleEndpoints
     public static void MapOrderLifecycleEndpoints(this IEndpointRouteBuilder app)
     {
         var orders = app.MapGroup("/api/orders").RequireAuthorization();
+        orders.MapGet("/{orderNumber:long}/refunds", async (long orderNumber, AniseDbContext db, CancellationToken ct) =>
+        {
+            var order = await db.Orders.AsNoTracking().Where(o => o.OrderNumber == orderNumber)
+                .Select(o => new { o.Id, o.Total, o.Status, Payments = o.Payments.Select(p => new { p.Amount, p.Method, p.Status, p.Provider }).ToList() }).SingleOrDefaultAsync(ct);
+            if (order is null) return Results.NotFound();
+            var refunds = await db.Refunds.AsNoTracking().Where(r => r.OrderId == order.Id).OrderBy(r => r.CreatedAtUtc)
+                .Select(r => new { r.Id, r.Amount, r.Method, r.Status, r.Reason, r.ProviderReference, r.CreatedAtUtc, r.CompletedAtUtc }).ToListAsync(ct);
+            var paid = order.Payments.Where(p => p.Status is PaymentStatus.Paid or PaymentStatus.PartiallyRefunded or PaymentStatus.Refunded).Sum(p => p.Amount);
+            var completed = refunds.Where(r => r.Status == RefundStatus.Completed).Sum(r => r.Amount);
+            var pending = refunds.Where(r => r.Status == RefundStatus.Pending).Sum(r => r.Amount);
+            return Results.Ok(new { order.Total, order.Status, order.Payments, paidAmount = paid, completedRefunds = completed, pendingRefunds = pending, remainingRefundable = Math.Max(0, paid - completed - pending), refunds });
+        });
         orders.MapPut("/{orderNumber:long}/cancel", async (long orderNumber, CancelOrderRequest request, AniseDbContext db, ClaimsPrincipal staff, CancellationToken ct) =>
         {
             var order = await db.Orders.SingleOrDefaultAsync(o => o.OrderNumber == orderNumber, ct);
@@ -37,10 +50,11 @@ public static class OrderLifecycleEndpoints
 
         orders.MapPost("/{orderNumber:long}/refunds", async (long orderNumber, CreateRefundRequest request, AniseDbContext db, ClaimsPrincipal staff, CancellationToken ct) =>
         {
+            await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
             var order = await db.Orders.Include(o => o.Payments).Include(o => o.Refunds).SingleOrDefaultAsync(o => o.OrderNumber == orderNumber, ct);
             if (order is null) return Results.NotFound();
             if (order.Status is not OrderStatus.Completed and not OrderStatus.Cancelled) return Results.Conflict(new { message = "Only completed or cancelled orders can be refunded." });
-            var paid = order.Payments.Where(p => p.Status is PaymentStatus.Paid or PaymentStatus.PartiallyRefunded).Sum(p => p.Amount);
+            var paid = order.Payments.Where(p => p.Status is PaymentStatus.Paid or PaymentStatus.PartiallyRefunded or PaymentStatus.Refunded).Sum(p => p.Amount);
             var refunded = order.Refunds.Where(r => r.Status is RefundStatus.Pending or RefundStatus.Completed).Sum(r => r.Amount);
             var remaining = paid - refunded;
             if (request.Amount <= 0 || request.Amount > remaining) return Results.BadRequest(new { message = $"Refund must be between £0.01 and {remaining:0.00}.", remainingRefundable = remaining });
@@ -50,7 +64,7 @@ public static class OrderLifecycleEndpoints
             var refund = new Refund { OrderId = order.Id, Amount = request.Amount, Method = request.Method ?? method, Reason = request.Reason.Trim(), Status = RefundStatus.Pending, ProviderReference = request.ProviderReference?.Trim(), Note = request.Note?.Trim() };
             db.Refunds.Add(refund);
             db.OrderStatusHistory.Add(new OrderStatusHistory { OrderId = order.Id, Status = order.Status, CreatedAtUtc = now, ChangedBy = staff.FindFirstValue(ClaimTypes.NameIdentifier), Note = $"Refund recorded as pending: £{refund.Amount:0.00} ({refund.Reason})" });
-            await db.SaveChangesAsync(ct); return Results.Ok(new { refund.Id, refund.Status, refund.Amount, remainingRefundable = remaining - refund.Amount, message = "Refund saved as pending. Confirm it only after the payment provider or cash return is verified." });
+            await db.SaveChangesAsync(ct); await tx.CommitAsync(ct); return Results.Ok(new { refund.Id, refund.Status, refund.Amount, remainingRefundable = remaining - refund.Amount, message = "Refund saved as pending. Confirm it only after the payment provider or cash return is verified." });
         });
 
         orders.MapPut("/{orderNumber:long}/refunds/{refundId:guid}/complete", async (long orderNumber, Guid refundId, CompleteRefundRequest request, AniseDbContext db, ClaimsPrincipal staff, CancellationToken ct) =>

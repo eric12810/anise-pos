@@ -502,7 +502,7 @@ public static class CommerceEndpoints
                         .Select(l => new ReceiptLineResponse(l.ProductName, db.Products.Where(p => p.Id == l.ProductId).Select(p => p.ChineseName).FirstOrDefault(), db.Products.Where(p => p.Id == l.ProductId).Select(p => p.IsVegan).FirstOrDefault(), l.VariantName, l.Quantity,
                             l.UnitPrice, l.LineTotal, l.Notes, l.Modifiers.OrderBy(m => m.CreatedAtUtc)
                                 .Select(m => new ReceiptModifierResponse(m.ModifierName, m.PriceAdjustment)).ToList()))
-                        .ToList()))
+                        .ToList(), o.CancelledAtUtc, o.CancellationReason))
                 .SingleOrDefaultAsync();
             return receipt is null ? Results.NotFound() : Results.Ok(receipt);
         });
@@ -593,7 +593,8 @@ public sealed record ReceiptResponse(long OrderNumber, OrderType OrderType, Orde
     DateTimeOffset CreatedAtUtc, string? CustomerName, string? CustomerPhone, string? DeliveryAddress,
     string? Notes, DateTimeOffset? EstimatedAtUtc, decimal Subtotal, decimal DiscountTotal, decimal DeliveryFee,
     string? CustomFeeDescription, decimal CustomFee, decimal Total,
-    ReceiptPaymentResponse? Payment, List<ReceiptLineResponse> Lines);
+    ReceiptPaymentResponse? Payment, List<ReceiptLineResponse> Lines,
+    DateTimeOffset? CancelledAtUtc, string? CancellationReason);
 public sealed record ReceiptPaymentResponse(PaymentMethod Method, PaymentStatus Status);
 public sealed record ReceiptLineResponse(string ProductName, string? ChineseName, bool IsVegan, string VariantName, int Quantity,
     decimal UnitPrice, decimal LineTotal, string? Notes, List<ReceiptModifierResponse> Modifiers);
