@@ -174,6 +174,7 @@ function buildOrderCard(order, id, compact = false) {
                 }
                 const next = id === 'new' ? 'Preparing' : id === 'preparing' ? 'Ready' : 'Completed';
                 const button = element('button', id === 'new' ? 'Start preparing' : 'Mark ' + next.toLowerCase(), 'advance');
+                if (next === 'Completed' && order.paymentStatus !== 'Paid') { button.disabled = true; button.classList.add('completion-unpaid'); card.append(element('p', 'Mark payment as paid before completing this order.', 'note')); }
                 button.setAttribute('aria-label', 'Order ' + order.orderNumber + ': ' + button.textContent);
                 button.addEventListener('click', () => advance(order, next));
                 card.append(button);
@@ -310,7 +311,7 @@ async function advance(order, status) {
     document.querySelectorAll('.advance,.payment-action').forEach(b => b.disabled = true);
     refresh.disabled = true;
     try {
-        await request('/api/order-queue/' + order.orderNumber + '/advance', { method: 'PUT' });
+        await request('/api/order-queue/' + order.orderNumber + '/advance', { method: 'POST', headers: { 'X-HTTP-Method-Override': 'PUT' } });
         saving = false;
         closeOrderDetails();
         await load();
@@ -319,7 +320,7 @@ async function advance(order, status) {
     } finally {
         saving = false;
         refresh.disabled = false;
-        document.querySelectorAll('.advance,.payment-action').forEach(b => b.disabled = false);
+        document.querySelectorAll('.advance,.payment-action').forEach(b => b.disabled = b.classList.contains('completion-unpaid'));
     }
 }
 
@@ -340,7 +341,7 @@ async function changePaymentMethod(order, method) {
     } finally {
         saving = false;
         refresh.disabled = false;
-        document.querySelectorAll('.advance,.payment-action').forEach(b => b.disabled = false);
+        document.querySelectorAll('.advance,.payment-action').forEach(b => b.disabled = b.classList.contains('completion-unpaid'));
     }
 }
 
@@ -358,7 +359,7 @@ async function startDelivery(order) {
     finally {
         saving = false;
         refresh.disabled = false;
-        document.querySelectorAll('.advance,.payment-action').forEach(b => b.disabled = false);
+        document.querySelectorAll('.advance,.payment-action').forEach(b => b.disabled = b.classList.contains('completion-unpaid'));
     }
 }
 
@@ -368,7 +369,7 @@ async function markPaid(order) {
     document.querySelectorAll('.advance,.payment-action').forEach(b => b.disabled = true);
     refresh.disabled = true;
     try {
-        await request('/api/order-queue/' + order.orderNumber + '/payment/paid', { method: 'PUT' });
+        await request('/api/order-queue/' + order.orderNumber + '/payment/paid', { method: 'POST', headers: { 'X-HTTP-Method-Override': 'PUT' } });
         saving = false;
         closeOrderDetails();
         await load();
@@ -377,7 +378,7 @@ async function markPaid(order) {
     } finally {
         saving = false;
         refresh.disabled = false;
-        document.querySelectorAll('.advance,.payment-action').forEach(b => b.disabled = false);
+        document.querySelectorAll('.advance,.payment-action').forEach(b => b.disabled = b.classList.contains('completion-unpaid'));
     }
 }
 

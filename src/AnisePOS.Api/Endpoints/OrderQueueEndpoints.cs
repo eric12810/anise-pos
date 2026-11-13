@@ -75,6 +75,7 @@ public static class OrderQueueEndpoints
         queue.MapPut("/{orderNumber:long}/advance", async (long orderNumber,
             AniseDbContext db, ClaimsPrincipal staff, CancellationToken ct) =>
         {
+            await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
             var order = await db.Orders.SingleOrDefaultAsync(o => o.OrderNumber == orderNumber, ct);
             if (order is null) return Results.NotFound();
             if (order.Status == OrderStatus.Placed && await db.Payments.AnyAsync(p => p.OrderId == order.Id && (p.Provider == "WebsiteCash" || p.Provider == "StripeCheckout"), ct))
@@ -88,10 +89,13 @@ public static class OrderQueueEndpoints
                 _ => (OrderStatus?)null
             };
             if (nextStatus is null) return Results.BadRequest(new { message = "This order cannot be advanced further." });
+            if (nextStatus == OrderStatus.Completed && !await db.Payments.AnyAsync(p => p.OrderId == order.Id && p.Status == PaymentStatus.Paid && p.Amount >= order.Total, ct))
+                return Results.Conflict(new { message = "Mark payment as paid before completing this order." });
 
             var now = DateTimeOffset.UtcNow;
-            order.Status = nextStatus.Value;
-            order.UpdatedAtUtc = now;
+            var updated = await db.Orders.Where(o => o.Id == order.Id && o.Status == previousStatus)
+                .ExecuteUpdateAsync(s => s.SetProperty(o => o.Status, nextStatus.Value).SetProperty(o => o.UpdatedAtUtc, now), ct);
+            if (updated != 1) return Results.Conflict(new { message = "This order has changed. Refresh the queue." });
             db.OrderStatusHistory.Add(new OrderStatusHistory
             {
                 OrderId = order.Id, Status = nextStatus.Value, CreatedAtUtc = now,
@@ -99,6 +103,7 @@ public static class OrderQueueEndpoints
                 Note = $"Status changed from {previousStatus} to {nextStatus.Value}"
             });
             await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
             return Results.Ok(new { orderNumber, status = nextStatus.Value });
         });
 
