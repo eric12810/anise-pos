@@ -44,6 +44,16 @@ _No website-only tasks recorded yet. Add them here as they arise._
 
 ### Deployment safety and recovery
 
+- [ ] **Integrate version-tracked SQL migrations into the POS production release workflow**
+  - Detect pending numbered, reviewed SQL migrations and track applied versions/checksums in a dedicated migration-history table; refuse changed scripts, duplicate versions or unexpected schema drift.
+  - Validate the exact target database and credentials before any SQL change: production must be `anisedatabase` via a dedicated production migration identity; staging must remain `anisedb`. Never copy live customer, order or payment data to staging.
+  - Test migrations against staging first, including repeat/no-op execution, failure recovery and compatibility with both the current live application and the incoming release.
+  - Before applying production migrations, require an approved release, a **fresh recoverable production SQL backup verified by a separate backup mechanism**, and an ordering/write freeze when required. Fail closed if any prerequisite cannot be verified; do not rely on a manually set backup flag alone.
+  - Apply only approved pending migrations in order with appropriate transaction/rollback handling, run schema and data-integrity postchecks, and **stop application deployment on any migration failure**. Do not silently use startup-time schema changes as a substitute.
+  - Separate potentially destructive or non-backward-compatible changes for explicit manual review and a staged expand/migrate/contract plan. Application rollback does not automatically reverse database migrations.
+  - Integrate this into the existing protected production release action rather than requiring a separate routine manual SQL step; skip cleanly when no migrations are pending. Keep database access credentials in protected secrets and never print them.
+  - Implement **after the current first production release is stable**, not as an untested change to the in-progress release.
+
 - [ ] **Automate pre-deployment backups for the live website and POS**
   - Add a backup step before each production deployment in the relevant GitHub Actions workflows.
   - Retrieve the current live website and POS files over FTPS, keeping their backups separate.
