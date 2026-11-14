@@ -10,12 +10,17 @@ on:
       mode:
         description: Select a staging operation
         type: choice
-        options: [deploy, check, dry-run, rename-test, v2-ftps-probe]
+        options: [deploy, check, dry-run, rename-test, v2-ftps-probe, v2-baseline]
         default: deploy
         required: true
+      baseline_approval:
+        description: 'For v2-baseline only, enter SEED POS V2 BASELINE'
+        required: false
+        type: string
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: pos-staging-ftps
@@ -28,7 +33,7 @@ jobs:
   validate:
     name: Build, test and validate package
     if: >-
-      (github.event_name != 'workflow_dispatch' || (inputs.mode != 'check' && inputs.mode != 'rename-test' && inputs.mode != 'v2-ftps-probe')) &&
+      (github.event_name != 'workflow_dispatch' || (inputs.mode != 'check' && inputs.mode != 'rename-test' && inputs.mode != 'v2-ftps-probe' && inputs.mode != 'v2-baseline')) &&
       !(github.event_name == 'push' && contains(github.event.head_commit.message, '[rename-probe]'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -132,6 +137,55 @@ jobs:
           V2_STAGING_DATABASE: anisedb
           V2_FTPS_PROBE_APPROVAL: PROBE STAGING FTPS
         run: python3 -m deployment.v2.cli ftps-probe --environment staging
+
+  v2-baseline:
+    name: Verify exact staging artifact and seed V2 baseline
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'v2-baseline' && github.ref == 'refs/heads/main' && inputs.baseline_approval == 'SEED POS V2 BASELINE'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Resolve exact successful staging deployment
+        id: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STAGING_RUN_ID: '43586075499'
+        run: python3 scripts/resolve-staging-release.py
+      - name: Confirm exact reviewed commit
+        run: test '${{ steps.release.outputs.commit_sha }}' = '0504481381965d8f770d03beaaeaaf2234ff64b0'
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: '43586075499'
+          name: ${{ steps.release.outputs.artifact_name }}
+          path: artifacts/v2-baseline
+      - name: Verify original 126-file artifact
+        run: python3 -m deployment.v2.staging_baseline original artifacts/v2-baseline
+      - name: Prepare and validate 125-file V2 candidate
+        run: |
+          python3 -m deployment.v2.prepare artifacts/v2-baseline
+          python3 -m deployment.v2.cli package --environment staging --artifact artifacts/v2-baseline
+        env: &v2_baseline_env
+          V2_STAGING_FTPS_HOST: ${{ secrets.STAGING_FTPS_HOST }}
+          V2_STAGING_FTPS_USER: stageposftp
+          V2_STAGING_FTPS_PASSWORD: ${{ secrets.STAGING_FTPS_PASSWORD }}
+          V2_STAGING_FTPS_ROOT: /stageposftp/wwwroot
+          V2_STAGING_SITE_URL: https://pos-staging.loveanise.co.uk
+          V2_STAGING_DATABASE: anisedb
+          V2_SEED_APPROVAL: ${{ inputs.baseline_approval }}
+      - name: Read-only remote file and health comparison
+        env: *v2_baseline_env
+        run: python3 -m deployment.v2.staging_baseline live artifacts/v2-baseline
+      - name: Seed exact healthy baseline metadata only
+        env: *v2_baseline_env
+        run: python3 -m deployment.v2.cli seed --environment staging --artifact artifacts/v2-baseline --release 0504481381965d8f770d03beaaeaaf2234ff64b0
+      - name: Read back state and recheck health
+        env: *v2_baseline_env
+        run: python3 -m deployment.v2.staging_baseline state artifacts/v2-baseline --release 0504481381965d8f770d03beaaeaaf2234ff64b0
 
   deploy:
     name: Deploy staging FTPS

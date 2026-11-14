@@ -132,7 +132,9 @@ def seed(ftp, target, root, release, *, health_check=health):
     files, artifact = package(root)
     ftp.cwd(target.root)
     names = set(ftp.list())
-    if OFFLINE in names or CURRENT in names or HEALTHY in names or record_name(release) in names:
+    if (OFFLINE in names or CURRENT in names or HEALTHY in names
+            or any(name.startswith(".anise-v2-") or name.endswith((".pending", ".previous"))
+                   for name in names)):
         raise RuntimeError("Baseline seed requires a clean, unseeded healthy site")
     if "web.config" not in names:
         raise RuntimeError("Hosted IIS web.config is absent")

@@ -169,6 +169,15 @@ class V2Tests(unittest.TestCase):
         engine.seed(ftp, TARGET, self.root, OLD, health_check=lambda _: None)
         self.assertEqual(model.parse_state(ftp.files[engine.CURRENT], TARGET)["phase"], "healthy")
 
+    def test_seed_rejects_other_pending_release_before_writing(self):
+        ftp = FakeFTP()
+        for name in model.package(self.root)[0]:
+            ftp.files[name] = (self.root / name).read_bytes()
+        ftp.files[engine.record_name(NEW) + ".pending"] = b"interrupted"
+        with self.assertRaisesRegex(RuntimeError, "clean, unseeded"):
+            engine.seed(ftp, TARGET, self.root, OLD, health_check=lambda _: None)
+        self.assertNotIn(engine.CURRENT, ftp.files)
+
     def test_upload_failure_keeps_maintenance_and_healthy_pointer(self):
         ftp = FakeFTP()
         baseline(ftp, self.root)
