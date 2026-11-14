@@ -69,11 +69,11 @@ class StagingFTP(ftplib.FTP_TLS):
         return '226 Upload complete'
 
 
-class ProductionFTP:
-    """Use curl for Winserve production paths, data transfers and file operations."""
-    def __init__(self, host, user, password, root):
-        if user != 'liveposftp' or root != '/wwwroot':
-            raise ValueError('Production FTPS account or root differs from the verified target')
+class CurlFTP:
+    """Use curl for Winserve paths, data transfers and file operations."""
+    def __init__(self, host, user, password, root, expected_user, expected_root):
+        if user != expected_user or root != expected_root:
+            raise ValueError('FTPS account or root differs from the approved target')
         self.host, self.user, self.password, self.root = host, user, password, root
         self.path = '/'
 
@@ -93,7 +93,10 @@ class ProductionFTP:
 
     def _run(self, path, *, listing=False, upload=None, commands=()):
         credentials = (self.user + ':' + self.password).replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r')
-        url = 'ftp://' + self.host + ':21/' + quote(path.lstrip('/'), safe='/')
+        # Curl needs a doubled slash for the staging account's server-absolute
+        # /stageposftp path; the production chroot uses the verified /wwwroot URL.
+        prefix = '//' if self.root == '/stageposftp/wwwroot' else '/'
+        url = 'ftp://' + self.host + ':21' + prefix + quote(path.lstrip('/'), safe='/')
         if listing and not url.endswith('/'):
             url += '/'
         args = ['curl', '--silent', '--show-error', '--fail', '--ssl-reqd',
@@ -339,31 +342,15 @@ def main():
     if not password:
         raise ValueError(('Production' if DEPLOYMENT_ENV == 'production' else 'Staging') + ' password secret is missing')
     files = package_files(Path('artifacts/staging'), Path('artifacts/staging-manifest.sha256'))
-    connection = (ProductionFTP(HOST, USER, password, REMOTE_ROOT) if DEPLOYMENT_ENV == 'production'
-                  else StagingFTP(context=ssl.create_default_context(), timeout=60))
+    expected_user, expected_root = (('liveposftp', '/wwwroot') if DEPLOYMENT_ENV == 'production'
+                                    else ('stageposftp', '/stageposftp/wwwroot'))
+    connection = CurlFTP(HOST, USER, password, REMOTE_ROOT, expected_user, expected_root)
     with connection as ftp:
-        if DEPLOYMENT_ENV == 'production':
-            ftp.cwd(REMOTE_ROOT)
-            directory_names(ftp)
-            print('Verified production FTPS destination with curl and certificate-checked TLS.', flush=True)
-            if args.deploy:
-                upload(ftp, files)
-            else:
-                print('Connection check only: no files created, changed or deleted.')
-            return
-        print('Step: connect to configured FTPS', flush=True)
-        ftp.connect(HOST, 21)
-        print('Step: negotiate and verify TLS', flush=True)
-        ftp.auth()
-        print('Step: authenticate configured FTPS account', flush=True)
-        ftp.login(USER, password)
-        print('Step: encrypt data channel', flush=True)
-        ftp.prot_p()
         print('Step: select configured FTPS root', flush=True)
         ftp.cwd(REMOTE_ROOT)
         print('Step: list configured FTPS root', flush=True)
         directory_names(ftp)
-        print('Verified TLS connection and encrypted directory listing at configured FTPS root.')
+        print('Verified curl TLS connection and encrypted directory listing at configured FTPS root.')
         if args.deploy:
             upload(ftp, files)
         else:

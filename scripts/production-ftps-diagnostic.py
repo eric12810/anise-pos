@@ -1,5 +1,6 @@
 """Read-only curl and FTP_TLS probes of the production POS FTP home."""
 import ftplib
+import json
 import os
 from pathlib import PurePosixPath
 import re
@@ -10,6 +11,7 @@ from urllib.parse import quote
 EXPECTED_USER = 'liveposftp'
 EXPECTED_ROOT = '/wwwroot'
 REQUIRED_FILES = {'web.config', 'AnisePOS.Api.dll'}
+MANIFEST = '.anise-pos-production-deployment.json'
 
 
 def required_config():
@@ -67,6 +69,31 @@ def curl_list(config, path):
     return names
 
 
+def curl_manifest(config):
+    credentials = config['LIVE_FTPS_USERNAME'] + ':' + config['LIVE_FTPS_PASSWORD']
+    escaped = credentials.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r')
+    url = 'ftp://' + config['LIVE_FTPS_HOST'] + ':21/wwwroot/' + MANIFEST
+    result = subprocess.run([
+        'curl', '--silent', '--show-error', '--fail', '--ssl-reqd', '--proto', '=ftp',
+        '--ftp-method', 'multicwd', '--connect-timeout', '20', '--max-time', '45',
+        '--max-filesize', '1048576', '--config', '-', url,
+    ], input=('user = "' + escaped + '"\n').encode(), capture_output=True, check=False)
+    if result.returncode:
+        raise RuntimeError('Read-only production manifest retrieval failed (curl exit ' + str(result.returncode) + ')')
+    try:
+        payload = json.loads(result.stdout)
+        files = payload['files']
+        if (payload.get('version') != 1 or payload.get('environment') != 'production'
+                or payload.get('application') != 'pos.loveanise.co.uk'
+                or not isinstance(files, dict) or not files
+                or any(not isinstance(name, str) or not isinstance(digest, str)
+                       or not re.fullmatch('[0-9a-f]{64}', digest) for name, digest in files.items())):
+            raise ValueError
+    except (ValueError, KeyError, TypeError):
+        raise RuntimeError('Production manifest identity or format is invalid') from None
+    print('PASS: production deployment manifest identifies pos.loveanise.co.uk; ' + str(len(files)) + ' managed files')
+
+
 def python_probe(config, path):
     try:
         with ftplib.FTP_TLS(context=ssl.create_default_context(), timeout=45) as ftp:
@@ -106,6 +133,9 @@ def main():
         print('FTP directory state: root listing empty; direct /wwwroot probe was still attempted')
     if site is None or not REQUIRED_FILES.issubset(site):
         raise RuntimeError('curl did not verify both required production POS filenames in /wwwroot')
+    if MANIFEST not in site:
+        raise RuntimeError('Production deployment manifest is missing from /wwwroot')
+    curl_manifest(config)
     if not configured:
         raise RuntimeError('PROD_FTPS_ROOT differs from the verified /wwwroot destination')
     print('PASS: curl verified the production POS /wwwroot destination; Python comparison complete')
