@@ -93,7 +93,10 @@ class CurlFTP:
 
     def _run(self, path, *, listing=False, upload=None, commands=()):
         credentials = (self.user + ':' + self.password).replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r')
-        url = 'ftp://' + self.host + ':21/' + quote(path.lstrip('/'), safe='/')
+        # Curl needs a doubled slash for the staging account's server-absolute
+        # /stageposftp path; the production chroot uses the verified /wwwroot URL.
+        prefix = '//' if self.root == '/stageposftp/wwwroot' else '/'
+        url = 'ftp://' + self.host + ':21' + prefix + quote(path.lstrip('/'), safe='/')
         if listing and not url.endswith('/'):
             url += '/'
         args = ['curl', '--silent', '--show-error', '--fail', '--ssl-reqd',
