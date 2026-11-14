@@ -8,12 +8,13 @@ on:
       mode:
         description: Select a staging operation
         type: choice
-        options: [check, dry-run, rename-test, v2-ftps-probe]
+        options: [check, dry-run, rename-test, v2-ftps-probe, v2-state-check]
         default: check
         required: true
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: anise-pos-staging
@@ -26,7 +27,7 @@ jobs:
   validate:
     name: Build, test and validate package
     if: >-
-      (github.event_name != 'workflow_dispatch' || (inputs.mode != 'check' && inputs.mode != 'rename-test' && inputs.mode != 'v2-ftps-probe')) &&
+      (github.event_name != 'workflow_dispatch' || (inputs.mode != 'check' && inputs.mode != 'rename-test' && inputs.mode != 'v2-ftps-probe' && inputs.mode != 'v2-state-check')) &&
       !(github.event_name == 'push' && contains(github.event.head_commit.message, '[rename-probe]'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -130,3 +131,30 @@ jobs:
           V2_STAGING_DATABASE: anisedb
           V2_FTPS_PROBE_APPROVAL: PROBE STAGING FTPS
         run: python3 -m deployment.v2.cli ftps-probe --environment staging
+
+  v2-state-check:
+    name: Read back V2 staging release state
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'v2-state-check' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: '43649042576'
+          name: anise-pos-v2-c71f1295dc5d9e8ee66fb66abed3256a8770f676
+          path: artifacts/v2-verified
+      - name: Compare current, healthy and release-history state
+        env:
+          V2_STAGING_FTPS_HOST: ${{ secrets.STAGING_FTPS_HOST }}
+          V2_STAGING_FTPS_USER: stageposftp
+          V2_STAGING_FTPS_PASSWORD: ${{ secrets.STAGING_FTPS_PASSWORD }}
+          V2_STAGING_FTPS_ROOT: /stageposftp/wwwroot
+          V2_STAGING_SITE_URL: https://pos-staging.loveanise.co.uk
+          V2_STAGING_DATABASE: anisedb
+        run: python3 -m deployment.v2.staging_baseline state artifacts/v2-verified --release c71f1295dc5d9e8ee66fb66abed3256a8770f676
