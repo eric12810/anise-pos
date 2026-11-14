@@ -55,8 +55,12 @@ def main(argv=None):
     if args.command == "preflight":
         print("Protected preflight evidence validated for exact artifact")
         return
-    if not os.environ.get("V2_ACTIVATED") == "yes":
+    staging_seed = args.command == "seed" and args.environment == "staging"
+    if not staging_seed and os.environ.get("V2_ACTIVATED") != "yes":
         raise ValueError("V2 is dormant until explicit workflow activation")
+    if args.command == "seed":
+        if os.environ.get("V2_SEED_APPROVAL") != "SEED POS V2 BASELINE" or len(args.release) != 40:
+            raise ValueError("Reviewed baseline approval and exact commit SHA required")
     prefix = "V2_" + args.environment.upper() + "_"
     ftp = CurlFTPS(target, os.environ.get(prefix + "FTPS_PASSWORD", ""))
     if args.command == "backup":
@@ -69,8 +73,6 @@ def main(argv=None):
             raise ValueError("Exact commit SHA required")
         print(deploy(ftp, target, args.artifact, args.release))
     elif args.command == "seed":
-        if os.environ.get("V2_SEED_APPROVAL") != "SEED POS V2 BASELINE" or len(args.release) != 40:
-            raise ValueError("Reviewed baseline approval and exact commit SHA required")
         print(seed(ftp, target, args.artifact, args.release))
 
 

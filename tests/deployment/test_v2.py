@@ -8,7 +8,7 @@ import unittest
 from unittest import mock
 from zipfile import ZipFile
 
-from deployment.v2 import engine, model, preflight, transport
+from deployment.v2 import cli, engine, model, preflight, transport
 
 TARGET = model.Target("staging", "wsuk32.pronameserver.com", "stageposftp", "/stageposftp/wwwroot",
                       "https://pos-staging.loveanise.co.uk", "anisedb")
@@ -16,6 +16,61 @@ PROD = model.Target("production", "wsuk32.pronameserver.com", "liveposftp", "/ww
                     "https://pos.loveanise.co.uk", "anisedatabase")
 OLD = "a" * 40
 NEW = "b" * 40
+
+
+class CliSeedGuards(unittest.TestCase):
+    def run_seed(self, environment, *, activated="", approval=""):
+        target = TARGET if environment == "staging" else PROD
+        settings = {"V2_ACTIVATED": activated, "V2_SEED_APPROVAL": approval}
+        with mock.patch.dict(os.environ, settings), \
+             mock.patch.object(cli, "target_from_env", return_value=target), \
+             mock.patch.object(cli, "package", return_value=({}, "digest")), \
+             mock.patch.object(cli, "CurlFTPS") as ftps, \
+             mock.patch.object(cli, "seed") as seed, \
+             mock.patch.object(cli, "validate_evidence"):
+            args = ["seed", "--environment", environment, "--release", OLD]
+            if environment == "production":
+                args += ["--evidence", __file__, "--db-probe", __file__]
+            try:
+                cli.main(args)
+                error = None
+            except ValueError as exc:
+                error = exc
+            return error, ftps.called, seed.called
+
+    def test_unapproved_staging_seed_is_rejected_before_ftps(self):
+        error, ftps, seed = self.run_seed("staging")
+        self.assertIsNotNone(error)
+        self.assertFalse(ftps)
+        self.assertFalse(seed)
+
+    def test_approved_staging_seed_allowed_before_activation(self):
+        error, ftps, seed = self.run_seed("staging", approval="SEED POS V2 BASELINE")
+        self.assertIsNone(error)
+        self.assertTrue(ftps)
+        self.assertTrue(seed)
+
+    def test_production_seed_still_requires_activation_and_approval(self):
+        self.assertFalse(self.run_seed("production", approval="SEED POS V2 BASELINE")[2])
+        self.assertFalse(self.run_seed("production", activated="yes")[2])
+        self.assertTrue(self.run_seed("production", activated="yes", approval="SEED POS V2 BASELINE")[2])
+
+    def test_deploy_still_requires_activation(self):
+        with mock.patch.dict(os.environ, {"V2_ACTIVATED": ""}), \
+             mock.patch.object(cli, "target_from_env", return_value=TARGET), \
+             mock.patch.object(cli, "package", return_value=({}, "digest")), \
+             mock.patch.object(cli, "CurlFTPS") as ftps:
+            with self.assertRaisesRegex(ValueError, "dormant"):
+                cli.main(["deploy", "--environment", "staging", "--release", OLD])
+            ftps.assert_not_called()
+
+    def test_production_rollback_still_requires_activation(self):
+        with mock.patch.dict(os.environ, {"V2_ACTIVATED": "", "V2_ROLLBACK_APPROVAL": "ROLLBACK POS PRODUCTION"}), \
+             mock.patch.object(cli, "target_from_env", return_value=PROD), \
+             mock.patch.object(cli, "CurlFTPS") as ftps:
+            with self.assertRaisesRegex(ValueError, "rollback approval"):
+                cli.main(["rollback", "--environment", "production", "--release", OLD, "--archive", "backup.zip"])
+            ftps.assert_not_called()
 
 
 class FakeFTP:
