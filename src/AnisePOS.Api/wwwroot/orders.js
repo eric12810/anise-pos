@@ -183,6 +183,7 @@ function buildOrderCard(order, id, compact = false) {
                         card.append(element('p', 'Delivery started', 'detail'));
                     } else {
                         const start = element('button', 'Start delivery', 'payment-action');
+                        if (order.paymentStatus !== 'Paid') { start.disabled = true; start.classList.add('completion-unpaid'); card.append(element('p', 'Mark payment as paid before starting delivery.', 'note')); }
                         start.setAttribute('aria-label', 'Order ' + order.orderNumber + ': start delivery');
                         start.addEventListener('click', () => startDelivery(order));
                         card.append(start);

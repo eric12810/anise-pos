@@ -171,7 +171,14 @@ public static class OrderQueueEndpoints
                 payment.Status != websitePayment.Status || payment.Amount != websitePayment.Amount)
                 return Results.Conflict(new { message = "This order has changed. Refresh the queue." });
             order.Status = OrderStatus.Cancelled; order.UpdatedAtUtc = DateTimeOffset.UtcNow;
-            if (payment.Provider == "StripeCheckout") { payment.Status = PaymentStatus.Refunded; payment.UpdatedAtUtc = DateTimeOffset.UtcNow; }
+            if (payment.Provider == "StripeCheckout")
+            {
+                var refundedAt = DateTimeOffset.UtcNow;
+                payment.Status = PaymentStatus.Refunded; payment.UpdatedAtUtc = refundedAt;
+                db.Refunds.Add(new Refund { OrderId = order.Id, Amount = payment.Amount, Method = payment.Method,
+                    Status = RefundStatus.Completed, CompletedAtUtc = refundedAt,
+                    Reason = "Website order declined", ProviderReference = payment.ProviderReference });
+            }
             db.OrderStatusHistory.Add(new OrderStatusHistory { OrderId = order.Id, Status = OrderStatus.Cancelled,
                 ChangedBy = staff.FindFirstValue(ClaimTypes.NameIdentifier), Note = payment.Provider == "StripeCheckout" ? "Website order declined after full Stripe refund" : "Website cash order declined" });
             await db.SaveChangesAsync(ct); await tx.CommitAsync(ct);
@@ -186,6 +193,8 @@ public static class OrderQueueEndpoints
             if (order is null) return Results.NotFound();
             if (order.OrderType != OrderType.Delivery || order.Status != OrderStatus.Ready)
                 return Results.Conflict(new { message = "Only ready delivery orders can start delivery." });
+            if (!await db.Payments.AnyAsync(p => p.OrderId == order.Id && p.Status == PaymentStatus.Paid && p.Amount >= order.Total, ct))
+                return Results.Conflict(new { message = "Mark payment as paid before handing over this order." });
             var existing = await db.WebsiteConfirmations.FirstOrDefaultAsync(c => c.OrderId == order.Id && c.Kind == "DeliveryStarted", ct);
             if (existing is not null) return Results.Ok(new { state = existing.State });
             // Tracking reads this marker for both current and historical delivery orders.
@@ -225,11 +234,14 @@ public static class OrderQueueEndpoints
 
         queue.MapPut("/{orderNumber:long}/payment/paid", async (long orderNumber, AniseDbContext db, ClaimsPrincipal staff, CancellationToken ct) =>
         {
+            await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
             var payment = await db.Payments.Include(p => p.Order)
                 .Where(p => p.Order.OrderNumber == orderNumber)
                 .OrderByDescending(p => p.CreatedAtUtc)
                 .FirstOrDefaultAsync(ct);
             if (payment is null) return Results.NotFound(new { message = "No payment is recorded for this order." });
+            if (payment.Order.Status is OrderStatus.Cancelled or OrderStatus.Refunded or OrderStatus.Completed)
+                return Results.Conflict(new { message = "This order can no longer be marked paid." });
             if ((payment.Provider is "Stripe" or "StripeConfirming" or "StripeCancelled" or "StripeCheckout") && payment.Status != PaymentStatus.Paid)
                 return Results.Conflict(new { message = "Stripe payments must be verified with Stripe." });
             if (payment.Status == PaymentStatus.Paid)
@@ -244,6 +256,7 @@ public static class OrderQueueEndpoints
                 CreatedAtUtc = now, ChangedBy = staff.FindFirstValue(ClaimTypes.NameIdentifier),
                 Note = $"{payment.Method} payment marked paid" });
             await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
             return Results.Ok(new { orderNumber, payment.Method, payment.Status, payment.PaidAtUtc });
         });
     }

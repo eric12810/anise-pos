@@ -10,6 +10,50 @@ using Microsoft.Extensions.Configuration;
 using System.Security.Cryptography;
 using WebPush;
 
+var day1 = new DateTimeOffset(2026, 11, 12, 0, 0, 0, TimeSpan.Zero);
+var day2 = day1.AddDays(1);
+var confirmedPayment = ReportEndpoints.IsConfirmedPayment.Compile();
+if (confirmedPayment(new Payment { Status = PaymentStatus.Pending, PaidAtUtc = day1, Amount = 99m }) ||
+    confirmedPayment(new Payment { Status = PaymentStatus.Paid, Amount = 99m }) ||
+    !confirmedPayment(new Payment { Status = PaymentStatus.Paid, PaidAtUtc = day2, Amount = 10m }) ||
+    !confirmedPayment(new Payment { Status = PaymentStatus.RefundPending, PaidAtUtc = day1, Amount = 10m }) ||
+    !confirmedPayment(new Payment { Status = PaymentStatus.Refunded, PaidAtUtc = day1, Amount = 10m }))
+    throw new Exception("Confirmed payment eligibility checks failed.");
+var reportOrders = new[]
+{
+    new ReportEndpoints.ReportOrder(day1.AddHours(10), OrderType.Collection, OrderStatus.Completed, 10m, true),
+    new ReportEndpoints.ReportOrder(day1.AddHours(11), OrderType.Delivery, OrderStatus.Cancelled, 20m, true),
+    new ReportEndpoints.ReportOrder(day1.AddHours(12), OrderType.Collection, OrderStatus.Ready, 8m, false),
+    new ReportEndpoints.ReportOrder(day2.AddHours(9), OrderType.Delivery, OrderStatus.Completed, 15m, true)
+};
+var reportPayments = new[]
+{
+    new ReportEndpoints.ReportPayment(day2.AddHours(1), PaymentMethod.Cash, 10m),
+    new ReportEndpoints.ReportPayment(day1.AddHours(11), PaymentMethod.Card, 20m),
+    new ReportEndpoints.ReportPayment(day2.AddHours(9), PaymentMethod.Online, 15m)
+};
+var reportRefunds = new[]
+{
+    new ReportEndpoints.ReportRefund(day1.AddHours(12), day2.AddHours(2), PaymentMethod.Card, RefundStatus.Completed, 5m),
+    new ReportEndpoints.ReportRefund(day2.AddHours(3), day2.AddHours(3), PaymentMethod.Card, RefundStatus.Completed, 7m),
+    new ReportEndpoints.ReportRefund(day2.AddHours(4), null, PaymentMethod.Card, RefundStatus.Pending, 8m)
+};
+var firstReport = ReportEndpoints.Calculate(day1, day2, 0, reportOrders, reportPayments, reportRefunds);
+var secondReport = ReportEndpoints.Calculate(day2, day2.AddDays(1), 0, reportOrders, reportPayments, reportRefunds);
+var boundaryReport = ReportEndpoints.Calculate(day1, day2, 60, reportOrders,
+    [new ReportEndpoints.ReportPayment(day1.AddMinutes(30), PaymentMethod.Cash, 4m)], []);
+if (boundaryReport.Days.Any(d => d.PaidSales == 4m && d.Date != DateOnly.FromDateTime(day1.AddDays(-1).Date)))
+    throw new Exception("Trading-day offset check failed.");
+if (firstReport.OrderCount != 2 || firstReport.CollectionOrders != 2 || firstReport.DeliveryOrders != 0 ||
+    firstReport.GrossSales != 18m || firstReport.PendingSales != 8m || firstReport.CashSales != 0m ||
+    firstReport.CardSales != 20m || firstReport.CompletedRefunds != 0m || firstReport.NetPaidTakings != 20m ||
+    firstReport.CancelledOrders != 1 || firstReport.Days.Single().PaidSales != 20m ||
+    secondReport.OrderCount != 1 || secondReport.CashSales != 10m || secondReport.CardSales != 15m ||
+    secondReport.CompletedRefunds != 12m || secondReport.PendingRefunds != 8m ||
+    secondReport.NetPaidTakings != 13m || secondReport.Days.Single().PaidSales != 25m)
+    throw new Exception("Payment, cancelled order, partial refund or trading-day reporting checks failed.");
+Console.WriteLine("Passed payment-date, refund-date, cancelled order, partial refund and unpaid-order reporting checks.");
+
 var corsOptions = new CorsOptions();
 WebsiteCors.Configure(corsOptions);
 var websiteOrigins = new[]
