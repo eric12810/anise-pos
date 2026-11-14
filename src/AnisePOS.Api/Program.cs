@@ -7,6 +7,7 @@ using AnisePOS.Api.Notifications;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.AspNetCore.RateLimiting;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
@@ -83,6 +84,52 @@ builder.Services.AddAuthorizationBuilder()
 
 var app = builder.Build();
 
+// Production schema changes are reviewed and applied before deployment.
+// Keep the legacy bootstrap for staging until its structures have dedicated migrations.
+if (app.Environment.IsProduction())
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    var db = scope.ServiceProvider.GetRequiredService<AniseDbContext>();
+    var existingColumns = (await db.Database.SqlQueryRaw<string>("""
+        SELECT CONCAT(s.name, N'.', t.name, N'.', c.name) AS Value
+        FROM sys.schemas AS s
+        JOIN sys.tables AS t ON t.schema_id = s.schema_id
+        JOIN sys.columns AS c ON c.object_id = t.object_id
+        """).ToListAsync()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+    var missingMappedColumns = db.Model.GetEntityTypes()
+        .Where(entity => entity.GetTableName() is not null)
+        .SelectMany(entity =>
+        {
+            var table = entity.GetTableName()!;
+            var schema = entity.GetSchema() ?? "dbo";
+            var store = StoreObjectIdentifier.Table(table, schema);
+            return entity.GetProperties().Select(property =>
+                $"{schema}.{table}.{property.GetColumnName(store)}");
+        })
+        .Where(column => !existingColumns.Contains(column));
+    var missing = await db.Database.SqlQueryRaw<string>("""
+        SELECT Requirement AS Value
+        FROM (VALUES
+            (N'dbo.Orders', N'CancelledAtUtc', CAST(NULL AS nvarchar(128))),
+            (N'dbo.Orders', N'CancellationReason', NULL),
+            (N'dbo.Orders', N'ReopenedAtUtc', NULL),
+            (N'dbo.Refunds', N'Id', NULL),
+            (N'dbo.WebsiteCheckouts', N'ReconciliationError', NULL),
+            (N'dbo.WebsiteCheckouts', N'ReconciliationCheckedAtUtc', NULL),
+            (N'dbo.Payments', CAST(NULL AS nvarchar(128)), N'UX_Payments_StripeCheckout_Reference')
+        ) AS required(TableName, ColumnName, IndexName)
+        CROSS APPLY (SELECT CONCAT(required.TableName, N'.', COALESCE(required.ColumnName, required.IndexName)) AS Requirement) AS label
+        WHERE OBJECT_ID(required.TableName, N'U') IS NULL
+           OR (required.ColumnName IS NOT NULL AND COL_LENGTH(required.TableName, required.ColumnName) IS NULL)
+           OR (required.IndexName IS NOT NULL AND NOT EXISTS (
+               SELECT 1 FROM sys.indexes AS i
+               WHERE i.object_id = OBJECT_ID(required.TableName, N'U') AND i.name = required.IndexName))
+        """).ToListAsync();
+    missing.AddRange(missingMappedColumns);
+    if (missing.Count > 0)
+        throw new InvalidOperationException("Production database schema is incomplete: " + string.Join(", ", missing));
+}
+else
 await using (var scope = app.Services.CreateAsyncScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AniseDbContext>();

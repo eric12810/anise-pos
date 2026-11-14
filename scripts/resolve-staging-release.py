@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Resolve one successful POS staging dry-run through the GitHub API."""
+"""Resolve one successful deployed POS staging package through the GitHub API."""
 import json
 import os
 import urllib.request
@@ -40,17 +40,21 @@ if (
     or run.get('status') != 'completed'
     or run.get('conclusion') != 'success'
 ):
-    raise SystemExit('Run is not a successful POS staging dry run for this repository')
+    raise SystemExit('Run is not a successful POS staging deployment for this repository')
 
 workflow = get('/actions/workflows/' + str(run.get('workflow_id')))
-if workflow.get('path') != '.github/workflows/staging-dry-run.yml' or workflow.get('name') != 'POS staging dry run':
-    raise SystemExit('Run is not the approved POS staging dry-run workflow')
+if workflow.get('path') != '.github/workflows/staging-upload.yml' or workflow.get('name') != 'POS staging FTPS':
+    raise SystemExit('Run is not the approved POS staging deployment workflow')
+
+jobs = get('/actions/runs/' + run_id + '/jobs?per_page=100').get('jobs', [])
+if not any(job.get('name') == 'Deploy staging FTPS' and job.get('conclusion') == 'success' for job in jobs):
+    raise SystemExit('POS staging deployment job did not succeed')
 
 commit_sha = run.get('head_sha', '')
 matches = [
     artifact
     for artifact in get('/actions/runs/' + run_id + '/artifacts').get('artifacts', [])
-    if artifact.get('name', '').startswith('anise-pos-staging-')
+    if artifact.get('name') == 'anise-pos-staging-' + commit_sha
     and not artifact.get('expired')
     and artifact.get('workflow_run', {}).get('id') == int(run_id)
     and artifact.get('workflow_run', {}).get('repository_id') == run.get('repository', {}).get('id')
@@ -63,4 +67,4 @@ artifact_name = matches[0]['name']
 
 with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
     output.write('artifact_name=' + artifact_name + '\ncommit_sha=' + commit_sha + '\n')
-print('Resolved approved POS staging dry run artifact ' + artifact_name)
+print('Resolved deployed POS staging artifact ' + artifact_name)
