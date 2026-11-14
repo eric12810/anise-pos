@@ -46,13 +46,9 @@ def main():
             print('PASS: explicit FTPS authenticated with verified TLS and encrypted data channel')
             print('PASS: account is liveposftp; PROD_FTPS_ROOT is /wwwroot')
 
-            ftp.cwd('/')
-            root_names = names(ftp)
-            print('FTP / filenames: ' + ', '.join(sorted(root_names)))
-            if 'wwwroot' not in root_names:
-                raise RuntimeError('FTP root does not contain wwwroot')
-
-            ftp.cwd(EXPECTED_ROOT)
+            # IIS FTP may return an empty root listing despite allowing direct CWD.
+            # Navigate exactly as the staging uploader does.
+            ftp.cwd(config['PROD_FTPS_ROOT'])
             site_names = names(ftp)
             print('FTP /wwwroot filenames: ' + ', '.join(sorted(site_names)))
             if not REQUIRED_FILES.issubset(site_names):
