@@ -41,7 +41,8 @@ public sealed class ReceiptPrinter(IConfiguration configuration)
         if (order.OrderType == OrderType.Delivery && !string.IsNullOrWhiteSpace(order.DeliveryAddress)) Line(order.DeliveryAddress);
         foreach (var item in order.Lines.OrderBy(x => x.CreatedAtUtc).ThenBy(x => x.Id))
         {
-            Line($"{item.Quantity} x {item.ProductName}" + (item.VariantName == "Regular" ? "" : " - " + item.VariantName));
+            var name = item.IsVegan && kitchen ? "[V] " + item.ProductName : item.ProductName;
+            Line($"{item.Quantity} x {name}" + (item.VariantName == "Regular" ? "" : " - " + item.VariantName));
             foreach (var modifier in item.Modifiers.OrderBy(x => x.CreatedAtUtc))
                 Line("  + " + modifier.ModifierName + (!kitchen && modifier.PriceAdjustment != 0 ? " (" + Money(modifier.PriceAdjustment) + ")" : ""));
             if (!string.IsNullOrWhiteSpace(item.Notes)) Line("  NOTE: " + item.Notes);

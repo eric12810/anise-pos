@@ -4,6 +4,7 @@ using AnisePOS.Api.Domain;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
 using System.Text.Json;
+using AnisePOS.Api.Diagnostics;
 
 namespace AnisePOS.Api.Endpoints;
 
@@ -346,7 +347,11 @@ public static class CommerceEndpoints
                 .Select(o => new OrderHistoryItemResponse(o.OrderNumber, o.CreatedAtUtc, o.OrderType, o.Status,
                     o.CustomerName, o.CustomerPhone, o.Total, o.Lines.Sum(l => l.Quantity),
                     o.Payments.OrderByDescending(p => p.CreatedAtUtc)
-                        .Select(p => new ReceiptPaymentResponse(p.Method, p.Status)).FirstOrDefault()))
+                        .Select(p => new ReceiptPaymentResponse(p.Method, p.Status)).FirstOrDefault(),
+                    o.Refunds.Where(r => r.Status == RefundStatus.Completed).Sum(r => r.Amount),
+                    o.Payments.Where(p => p.Status == PaymentStatus.Paid || p.Status == PaymentStatus.PartiallyRefunded || p.Status == PaymentStatus.Refunded).Sum(p => p.Amount)
+                        > o.Refunds.Where(r => r.Status == RefundStatus.Completed || r.Status == RefundStatus.Pending).Sum(r => r.Amount),
+                    !o.Refunds.Any(r => r.Status == RefundStatus.Pending)))
                 .ToListAsync();
             return Results.Ok(new OrderHistoryResponse(items, page, pageSize, totalCount));
         });
@@ -412,86 +417,56 @@ public static class CommerceEndpoints
             return match is null ? Results.NotFound() : Results.Ok(match);
         });
 
-        orders.MapGet("/addresses-by-postcode", async (string postcode, IConfiguration configuration,
-            IHttpClientFactory httpClientFactory, CancellationToken ct) =>
-        {
-            var compactPostcode = new string(postcode.Where(char.IsLetterOrDigit).ToArray()).ToUpperInvariant();
-            if (compactPostcode.Length is < 5 or > 8)
-                return Results.ValidationProblem(new Dictionary<string, string[]> { ["postcode"] = ["Enter a valid UK postcode."] });
-            var apiKey = configuration["GoAddress:ApiKey"];
-            if (string.IsNullOrWhiteSpace(apiKey))
-                return Results.Problem("Address lookup is not configured.", statusCode: StatusCodes.Status503ServiceUnavailable);
+        orders.MapGet("/google-maps-config", (IConfiguration configuration) =>
+            Results.Ok(new { browserKey = configuration["GoogleMaps:BrowserKey"], configured = !string.IsNullOrWhiteSpace(configuration["GoogleMaps:BrowserKey"]) }));
 
-            using var request = new HttpRequestMessage(HttpMethod.Get,
-                $"https://portal.goaddress.io/api/address/{Uri.EscapeDataString(compactPostcode)}");
-            request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {apiKey}");
-            request.Headers.TryAddWithoutValidation("Accept", "application/json");
+        orders.MapPost("/driving-route", async (DrivingRouteRequest request, IConfiguration configuration,
+            IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, GoogleRouteDiagnosticState routeState, CancellationToken ct) =>
+        {
+            var key = configuration["GoogleMaps:RoutesServerKey"];
+            var destination = string.IsNullOrWhiteSpace(request.Address) ? request.Postcode?.Trim() : request.Address.Trim();
+            if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(destination))
+                return Results.ValidationProblem(new Dictionary<string, string[]> { ["destination"] = ["Enter a complete postcode or address."] });
+            using var message = new HttpRequestMessage(HttpMethod.Post, "https://routes.googleapis.com/directions/v2:computeRoutes");
+            message.Headers.TryAddWithoutValidation("X-Goog-Api-Key", key);
+            message.Headers.TryAddWithoutValidation("X-Goog-FieldMask", "routes.distanceMeters,routes.duration,routes.polyline.encodedPolyline,routes.legs.startLocation,routes.legs.endLocation");
+            object destinationValue = request.PlaceId is { Length: > 0 } ? new { placeId = request.PlaceId } : new { address = destination };
+            message.Content = new StringContent(JsonSerializer.Serialize(new {
+                origin = new { address = "Anise, NW1 8ET, London, UK" },
+                destination = destinationValue,
+                travelMode = "DRIVE", routingPreference = "TRAFFIC_UNAWARE", languageCode = "en-GB", regionCode = "GB"
+            }), System.Text.Encoding.UTF8, "application/json");
             try
             {
-                var client = httpClientFactory.CreateClient();
-                client.Timeout = TimeSpan.FromSeconds(30);
-                using var response = await client.SendAsync(request, ct);
-                if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return Results.Ok(Array.Empty<PostcodeAddressResponse>());
+                var client = httpClientFactory.CreateClient(); client.Timeout = TimeSpan.FromSeconds(12);
+                using var response = await client.SendAsync(message, ct);
                 if (!response.IsSuccessStatusCode)
                 {
-                    var detail = response.StatusCode switch
-                    {
-                        System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden => "GoAddress rejected the configured API key.",
-                        System.Net.HttpStatusCode.PaymentRequired => "The GoAddress account has no remaining lookup allowance.",
-                        System.Net.HttpStatusCode.TooManyRequests => "GoAddress's lookup rate limit has been reached. Try again shortly.",
-                        _ => $"GoAddress could not complete the lookup (provider status {(int)response.StatusCode})."
-                    };
-                    return Results.Problem(detail, statusCode: StatusCodes.Status502BadGateway);
+                    var body = await response.Content.ReadAsStringAsync(ct);
+                    var error = ParseGoogleRouteError(body);
+                    var category = ClassifyGoogleRouteError((int)response.StatusCode, error.Status);
+                    var ipMentioned = error.Message is not null &&
+                        System.Text.RegularExpressions.Regex.IsMatch(error.Message, "\\b(?:IP|IPv4|source address|client address)\\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    var safeMessage = SanitizeGoogleRouteMessage(error.Message, destination, request.PlaceId);
+                    loggerFactory.CreateLogger("AnisePOS.GoogleRoutes").LogWarning(
+                        "Google Routes failed. HttpStatus={HttpStatus} GoogleStatus={GoogleStatus} Category={Category} SanitisedMessage={Message} MentionsOutboundIp={MentionsOutboundIp}",
+                        (int)response.StatusCode, error.Status ?? "unknown", category, safeMessage, ipMentioned);
+                    routeState.Record(new GoogleRouteDiagnosticSnapshot(DateTimeOffset.UtcNow, (int)response.StatusCode,
+                        error.Status ?? "unknown", category, safeMessage, ipMentioned));
+                    return Results.Problem(SafeGoogleRouteError(category, ipMentioned), statusCode: GoogleRouteHttpStatus(category));
                 }
-                await using var stream = await response.Content.ReadAsStreamAsync(ct);
-                using var json = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
-                var root = json.RootElement;
-                double? distanceMiles = null;
-                try
-                {
-                    var shop = await LookupPostcodeCoordinatesAsync(client, "NW18ET", ct);
-                    var customer = await LookupPostcodeCoordinatesAsync(client, compactPostcode, ct);
-                    if (shop is not null && customer is not null)
-                        distanceMiles = Math.Round(CalculateDistanceMiles(shop.Value, customer.Value), 1);
-                }
-                catch (HttpRequestException) { }
-                catch (JsonException) { }
-                var result = new List<PostcodeAddressResponse>();
-                var fallbackPostcode = root.TryGetProperty("postcode", out var rootPostcode)
-                    ? rootPostcode.GetString() ?? postcode.Trim().ToUpperInvariant()
-                    : postcode.Trim().ToUpperInvariant();
-                if (root.TryGetProperty("new_address_res", out var structured) && structured.ValueKind == JsonValueKind.Array)
-                {
-                    result.AddRange(structured.EnumerateArray().Select(address => new PostcodeAddressResponse(
-                        address.TryGetProperty("raw_address", out var rawAddress) ? rawAddress.GetString() ?? "" : "",
-                        address.TryGetProperty("postcode", out var returnedPostcode) ? returnedPostcode.GetString() ?? fallbackPostcode : fallbackPostcode,
-                        address.TryGetProperty("addressid", out var addressId) ? addressId.GetString() : null,
-                        distanceMiles)));
-                }
-                else if (root.TryGetProperty("results", out var addresses) && addresses.ValueKind == JsonValueKind.Array)
-                {
-                    result.AddRange(addresses.EnumerateArray().Select(address => new PostcodeAddressResponse(
-                        address.TryGetProperty("address", out var formatted) ? formatted.GetString() ?? "" : "",
-                        address.TryGetProperty("postcode", out var returnedPostcode) ? returnedPostcode.GetString() ?? fallbackPostcode : fallbackPostcode,
-                        address.TryGetProperty("addressid", out var addressId) ? addressId.GetString() : null,
-                        distanceMiles)));
-                }
-                else if (root.TryGetProperty("addresses", out var labels) && labels.ValueKind == JsonValueKind.Array)
-                {
-                    result.AddRange(labels.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String)
-                        .Select(address => new PostcodeAddressResponse(address.GetString() ?? "", fallbackPostcode, null, distanceMiles)));
-                }
-                result = result.Where(address => !string.IsNullOrWhiteSpace(address.Address)).Take(200).ToList();
-                return Results.Ok(result);
+                using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+                var route = json.RootElement.GetProperty("routes").EnumerateArray().FirstOrDefault();
+                if (route.ValueKind == JsonValueKind.Undefined || !route.TryGetProperty("distanceMeters", out var metres))
+                    return Results.Problem("No driving route was found. Confirm the address or enter a manual delivery charge.", statusCode: StatusCodes.Status422UnprocessableEntity);
+                var distance = metres.GetInt64();
+                var duration = route.GetProperty("duration").GetString() ?? "0s";
+                var seconds = double.TryParse(duration.TrimEnd('s'), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsed) ? parsed : 0;
+                var polyline = route.GetProperty("polyline").GetProperty("encodedPolyline").GetString();
+                return Results.Ok(new DrivingRouteResponse(distance, Math.Round(distance / 1609.344, 2), (int)Math.Round(seconds / 60), distance > 2 * 1609.344 ? 2.50m : 0m, polyline));
             }
-            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-            {
-                return Results.Problem("The address lookup timed out.", statusCode: StatusCodes.Status504GatewayTimeout);
-            }
-            catch (HttpRequestException)
-            {
-                return Results.Problem("The address provider could not be reached.", statusCode: StatusCodes.Status502BadGateway);
-            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return Results.Problem("The driving route timed out.", statusCode: 504); }
+            catch (HttpRequestException) { return Results.Problem("Google route service is unavailable. Enter a manual delivery charge.", statusCode: 502); }
         });
 
         orders.MapPost("/{orderNumber:long}/print/{type}", async (long orderNumber, string type,
@@ -502,6 +477,10 @@ public static class CommerceEndpoints
                 .Include(o => o.Lines).ThenInclude(l => l.Modifiers)
                 .SingleOrDefaultAsync(o => o.OrderNumber == orderNumber, ct);
             if (order is null) return Results.NotFound();
+            var veganProductIds = await db.Products.AsNoTracking()
+                .Where(p => p.IsVegan && order.Lines.Where(l => l.ProductId.HasValue).Select(l => l.ProductId!.Value).Contains(p.Id))
+                .Select(p => p.Id).ToListAsync(ct);
+            foreach (var line in order.Lines) line.IsVegan = line.ProductId.HasValue && veganProductIds.Contains(line.ProductId.Value);
             try
             {
                 var printerHost = await db.DeliverySettings.AsNoTracking().Where(x => x.Id == 1).Select(x => x.PrinterIpAddress).SingleOrDefaultAsync(ct);
@@ -524,10 +503,10 @@ public static class CommerceEndpoints
                     o.Payments.OrderByDescending(p => p.CreatedAtUtc)
                         .Select(p => new ReceiptPaymentResponse(p.Method, p.Status)).FirstOrDefault(),
                     o.Lines.OrderBy(l => l.CreatedAtUtc).ThenBy(l => l.Id)
-                        .Select(l => new ReceiptLineResponse(l.ProductName, db.Products.Where(p => p.Id == l.ProductId).Select(p => p.ChineseName).FirstOrDefault(), l.VariantName, l.Quantity,
+                        .Select(l => new ReceiptLineResponse(l.ProductName, db.Products.Where(p => p.Id == l.ProductId).Select(p => p.ChineseName).FirstOrDefault(), db.Products.Where(p => p.Id == l.ProductId).Select(p => p.IsVegan).FirstOrDefault(), l.VariantName, l.Quantity,
                             l.UnitPrice, l.LineTotal, l.Notes, l.Modifiers.OrderBy(m => m.CreatedAtUtc)
                                 .Select(m => new ReceiptModifierResponse(m.ModifierName, m.PriceAdjustment)).ToList()))
-                        .ToList()))
+                        .ToList(), o.CancelledAtUtc, o.CancellationReason))
                 .SingleOrDefaultAsync();
             return receipt is null ? Results.NotFound() : Results.Ok(receipt);
         });
@@ -540,33 +519,53 @@ public static class CommerceEndpoints
         });
     }
 
-    private static async Task<(double Latitude, double Longitude)?> LookupPostcodeCoordinatesAsync(
-        HttpClient client, string postcode, CancellationToken ct)
+    public static (string? Status, string? Message) ParseGoogleRouteError(string body)
     {
-        using var response = await client.GetAsync(
-            $"https://api.postcodes.io/postcodes/{Uri.EscapeDataString(postcode)}", ct);
-        if (!response.IsSuccessStatusCode) return null;
-        await using var stream = await response.Content.ReadAsStreamAsync(ct);
-        using var json = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
-        if (!json.RootElement.TryGetProperty("result", out var result) || result.ValueKind != JsonValueKind.Object ||
-            !result.TryGetProperty("latitude", out var latitude) || latitude.ValueKind != JsonValueKind.Number ||
-            !result.TryGetProperty("longitude", out var longitude) || longitude.ValueKind != JsonValueKind.Number)
-            return null;
-        return (latitude.GetDouble(), longitude.GetDouble());
+        try
+        {
+            using var json = JsonDocument.Parse(body);
+            if (!json.RootElement.TryGetProperty("error", out var error)) return (null, null);
+            var status = error.TryGetProperty("status", out var statusValue) ? statusValue.GetString() : null;
+            var message = error.TryGetProperty("message", out var messageValue) ? messageValue.GetString() : null;
+            return (status, message);
+        }
+        catch (JsonException) { return (null, null); }
     }
 
-    private static double CalculateDistanceMiles(
-        (double Latitude, double Longitude) from, (double Latitude, double Longitude) to)
+    public static string ClassifyGoogleRouteError(int httpStatus, string? googleStatus) =>
+        googleStatus is "PERMISSION_DENIED" or "UNAUTHENTICATED" || httpStatus is 401 or 403 ? "ApiRestriction" :
+        googleStatus == "INVALID_ARGUMENT" || httpStatus == 400 ? "InvalidRequest" :
+        googleStatus == "RESOURCE_EXHAUSTED" || httpStatus == 429 ? "Quota" :
+        googleStatus is "UNAVAILABLE" or "DEADLINE_EXCEEDED" || httpStatus is 408 or 500 or 502 or 503 or 504 ? "NetworkOrGoogleUnavailable" :
+        "GoogleError";
+
+    public static string SanitizeGoogleRouteMessage(string? message, string? destination, string? placeId)
     {
-        const double earthRadiusMiles = 3958.7613;
-        static double Radians(double degrees) => degrees * Math.PI / 180d;
-        var latitudeDelta = Radians(to.Latitude - from.Latitude);
-        var longitudeDelta = Radians(to.Longitude - from.Longitude);
-        var a = Math.Pow(Math.Sin(latitudeDelta / 2), 2) +
-            Math.Cos(Radians(from.Latitude)) * Math.Cos(Radians(to.Latitude)) *
-            Math.Pow(Math.Sin(longitudeDelta / 2), 2);
-        return earthRadiusMiles * 2 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1 - a));
+        var safe = string.IsNullOrWhiteSpace(message) ? "No error message returned." : message.Trim();
+        if (!string.IsNullOrWhiteSpace(destination)) safe = safe.Replace(destination, "[redacted-destination]", StringComparison.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(placeId)) safe = safe.Replace(placeId, "[redacted-place-id]", StringComparison.Ordinal);
+        safe = System.Text.RegularExpressions.Regex.Replace(safe, "(?i)(AIza[0-9A-Za-z_-]{20,}|key[= ]+[0-9A-Za-z_-]{12,})", "[redacted-key]");
+        safe = new string(safe.Where(c => !char.IsControl(c)).ToArray());
+        return safe.Length <= 240 ? safe : safe[..240];
     }
+
+    private static string SafeGoogleRouteError(string category, bool ipMentioned) => category switch
+    {
+        "ApiRestriction" when ipMentioned => "Google rejected the Routes request from the server network. Check the Routes key's server/IP restrictions.",
+        "ApiRestriction" => "Google rejected the Routes request because of API-key or API restrictions.",
+        "InvalidRequest" => "Google rejected the route request. Check the postcode or selected address.",
+        "Quota" => "Google Routes quota or billing limits were reached. Enter a manual delivery charge.",
+        "NetworkOrGoogleUnavailable" => "Google Routes is temporarily unavailable. Enter a manual delivery charge.",
+        _ => "Google could not calculate the route. Enter a manual delivery charge."
+    };
+
+    private static int GoogleRouteHttpStatus(string category) => category switch
+    {
+        "InvalidRequest" => StatusCodes.Status400BadRequest,
+        "Quota" => StatusCodes.Status429TooManyRequests,
+        "NetworkOrGoogleUnavailable" => StatusCodes.Status503ServiceUnavailable,
+        _ => StatusCodes.Status502BadGateway
+    };
 
     private static string Slugify(string input) => string.Join('-', input.Trim().ToLowerInvariant().Split([' ', '_', '-'], StringSplitOptions.RemoveEmptyEntries));
     private static IResult Invalid(string key, string message) => Results.ValidationProblem(new Dictionary<string, string[]> { [key] = [message] });
@@ -598,16 +597,19 @@ public sealed record ReceiptResponse(long OrderNumber, OrderType OrderType, Orde
     DateTimeOffset CreatedAtUtc, string? CustomerName, string? CustomerPhone, string? DeliveryAddress,
     string? Notes, DateTimeOffset? EstimatedAtUtc, decimal Subtotal, decimal DiscountTotal, decimal DeliveryFee,
     string? CustomFeeDescription, decimal CustomFee, decimal Total,
-    ReceiptPaymentResponse? Payment, List<ReceiptLineResponse> Lines);
+    ReceiptPaymentResponse? Payment, List<ReceiptLineResponse> Lines,
+    DateTimeOffset? CancelledAtUtc, string? CancellationReason);
 public sealed record ReceiptPaymentResponse(PaymentMethod Method, PaymentStatus Status);
-public sealed record ReceiptLineResponse(string ProductName, string? ChineseName, string VariantName, int Quantity,
+public sealed record ReceiptLineResponse(string ProductName, string? ChineseName, bool IsVegan, string VariantName, int Quantity,
     decimal UnitPrice, decimal LineTotal, string? Notes, List<ReceiptModifierResponse> Modifiers);
 public sealed record ReceiptModifierResponse(string ModifierName, decimal PriceAdjustment);
 public sealed record PostcodeAddressResponse(string Address, string Postcode, string? Uprn, double? DistanceMiles);
+public sealed record DrivingRouteRequest(string? Postcode, string? Address, string? PlaceId);
+public sealed record DrivingRouteResponse(long DistanceMetres, double DistanceMiles, int DurationMinutes, decimal DeliveryFee, string? EncodedPolyline);
 public sealed record OrderHistoryResponse(List<OrderHistoryItemResponse> Items, int Page, int PageSize, int TotalCount);
 public sealed record OrderHistoryItemResponse(long OrderNumber, DateTimeOffset CreatedAtUtc, OrderType OrderType,
     OrderStatus Status, string? CustomerName, string? CustomerPhone, decimal Total, int ItemCount,
-    ReceiptPaymentResponse? Payment);
+    ReceiptPaymentResponse? Payment, decimal CompletedRefunds, bool CanRefund, bool CanReopen);
 public sealed record MenuImportRequest(List<MenuImportCategory> Categories);
 public sealed record MenuImportCategory(string Name, List<MenuImportProduct> Products);
 public sealed record MenuImportProduct(string Name, decimal Price, string? Description);

@@ -1,5 +1,21 @@
 'use strict';
 const message = document.querySelector('#message');
+const stripeAlert = document.createElement('p');
+stripeAlert.style.cssText = 'margin:0 24px 16px;padding:12px;background:#fff2d9;color:#7a3000;font-weight:700';
+stripeAlert.hidden = true;
+message.after(stripeAlert);
+async function checkStripeAlerts() {
+    try {
+        const response = await fetch('/api/admin/stripe-checkout-alerts', {credentials:'same-origin', cache:'no-store'});
+        if (response.status === 403) return;
+        if (!response.ok) throw new Error();
+        const alerts = await response.json();
+        stripeAlert.hidden = alerts.length === 0;
+        stripeAlert.textContent = alerts.length ? `${alerts.length} website card checkout${alerts.length === 1 ? '' : 's'} need payment review. Check Stripe and the POS logs before taking another order from these customers.` : '';
+    } catch (_) { stripeAlert.hidden = false; stripeAlert.textContent = 'Could not check website card payment alerts. Ask a manager to review Stripe.'; }
+}
+checkStripeAlerts();
+setInterval(checkStripeAlerts, 60000);
 const updated = document.querySelector('#updated');
 const refresh = document.querySelector('#refresh');
 const money = new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP' });
@@ -12,6 +28,8 @@ const soundStatus = document.querySelector('#sound-status');
 const detailDialog = document.querySelector('#order-detail-dialog');
 const detailContent = document.querySelector('#order-detail-content');
 const detailStatus = document.querySelector('#order-detail-status');
+const cancelDialog = document.querySelector('#cancel-dialog'), cancelError = document.querySelector('#cancel-error'), cancelConfirm = document.querySelector('#cancel-confirm');
+let cancellingOrder = null;
 document.querySelector('#order-detail-close').addEventListener('click', () => detailDialog.close());
 detailDialog.addEventListener('close', () => { detailContent.replaceChildren(); load(); });
 new MutationObserver(() => { if (detailDialog.open) detailStatus.textContent = message.textContent; }).observe(message, {childList: true, characterData: true, subtree: true});
@@ -139,6 +157,10 @@ function buildOrderCard(order, id, compact = false) {
                 }
             } else card.append(element('p', 'Payment not recorded', 'payment missing'));
             card.append(receipts, ...paymentActions);
+            if (!compact && !['Completed', 'Cancelled', 'Refunded'].includes(order.status)) {
+                const cancel = element('button', 'Cancel order', 'decline-order');
+                cancel.type = 'button'; cancel.addEventListener('click', () => cancelOrder(order)); card.append(cancel);
+            }
             if (websiteOrder && order.status === 'Placed') {
                 const acceptForm = element('form', undefined, 'accept-form');
                 const label = element('label', 'Minutes until ' + (order.orderType === 'Delivery' ? 'delivery' : 'collection'));
@@ -161,6 +183,7 @@ function buildOrderCard(order, id, compact = false) {
                         card.append(element('p', 'Delivery started', 'detail'));
                     } else {
                         const start = element('button', 'Start delivery', 'payment-action');
+                        if (order.paymentStatus !== 'Paid') { start.disabled = true; start.classList.add('completion-unpaid'); card.append(element('p', 'Mark payment as paid before starting delivery.', 'note')); }
                         start.setAttribute('aria-label', 'Order ' + order.orderNumber + ': start delivery');
                         start.addEventListener('click', () => startDelivery(order));
                         card.append(start);
@@ -168,12 +191,22 @@ function buildOrderCard(order, id, compact = false) {
                 }
                 const next = id === 'new' ? 'Preparing' : id === 'preparing' ? 'Ready' : 'Completed';
                 const button = element('button', id === 'new' ? 'Start preparing' : 'Mark ' + next.toLowerCase(), 'advance');
+                if (next === 'Completed' && order.paymentStatus !== 'Paid') { button.disabled = true; button.classList.add('completion-unpaid'); card.append(element('p', 'Mark payment as paid before completing this order.', 'note')); }
                 button.setAttribute('aria-label', 'Order ' + order.orderNumber + ': ' + button.textContent);
                 button.addEventListener('click', () => advance(order, next));
                 card.append(button);
             }
             return card;
 }
+
+async function cancelOrder(order) {
+    if (saving) return;
+    cancellingOrder = order; cancelError.textContent = ''; document.querySelector('#cancel-order-label').textContent = 'Order #' + order.orderNumber + ' will leave the active queue. Payments are not refunded automatically.';
+    document.querySelector('input[name="cancel-reason"][value="Customer Request"]').checked = true; document.querySelector('#cancel-other-input').value = ''; document.querySelector('#cancel-other').hidden = true; cancelDialog.showModal();
+}
+document.querySelectorAll('input[name="cancel-reason"]').forEach(input => input.addEventListener('change', () => { document.querySelector('#cancel-other').hidden = input.value !== 'Other' || !input.checked; }));
+document.querySelector('#cancel-keep').addEventListener('click', () => cancelDialog.close());
+cancelConfirm.addEventListener('click', async () => { if (!cancellingOrder || saving) return; const selected = document.querySelector('input[name="cancel-reason"]:checked').value; const reason = selected === 'Other' ? document.querySelector('#cancel-other-input').value.trim() : selected; if (!reason) { cancelError.textContent = 'Enter a cancellation reason.'; return; } saving = true; cancelConfirm.disabled = true; cancelError.textContent = 'Cancelling order…'; try { await request('/api/orders/' + cancellingOrder.orderNumber + '/cancel', {method:'POST', headers:{'Content-Type':'application/json', 'X-HTTP-Method-Override':'PUT'}, body:JSON.stringify({reason})}); cancelDialog.close(); closeOrderDetails(); } catch (error) { cancelError.textContent = error.message; } finally { saving = false; cancelConfirm.disabled = false; } });
 
 function updateOverdueCards() {
     const now = Date.now();
@@ -295,7 +328,7 @@ async function advance(order, status) {
     document.querySelectorAll('.advance,.payment-action').forEach(b => b.disabled = true);
     refresh.disabled = true;
     try {
-        await request('/api/order-queue/' + order.orderNumber + '/advance', { method: 'PUT' });
+        await request('/api/order-queue/' + order.orderNumber + '/advance', { method: 'POST', headers: { 'X-HTTP-Method-Override': 'PUT' } });
         saving = false;
         closeOrderDetails();
         await load();
@@ -304,7 +337,7 @@ async function advance(order, status) {
     } finally {
         saving = false;
         refresh.disabled = false;
-        document.querySelectorAll('.advance,.payment-action').forEach(b => b.disabled = false);
+        document.querySelectorAll('.advance,.payment-action').forEach(b => b.disabled = b.classList.contains('completion-unpaid'));
     }
 }
 
@@ -325,7 +358,7 @@ async function changePaymentMethod(order, method) {
     } finally {
         saving = false;
         refresh.disabled = false;
-        document.querySelectorAll('.advance,.payment-action').forEach(b => b.disabled = false);
+        document.querySelectorAll('.advance,.payment-action').forEach(b => b.disabled = b.classList.contains('completion-unpaid'));
     }
 }
 
@@ -343,7 +376,7 @@ async function startDelivery(order) {
     finally {
         saving = false;
         refresh.disabled = false;
-        document.querySelectorAll('.advance,.payment-action').forEach(b => b.disabled = false);
+        document.querySelectorAll('.advance,.payment-action').forEach(b => b.disabled = b.classList.contains('completion-unpaid'));
     }
 }
 
@@ -353,7 +386,7 @@ async function markPaid(order) {
     document.querySelectorAll('.advance,.payment-action').forEach(b => b.disabled = true);
     refresh.disabled = true;
     try {
-        await request('/api/order-queue/' + order.orderNumber + '/payment/paid', { method: 'PUT' });
+        await request('/api/order-queue/' + order.orderNumber + '/payment/paid', { method: 'POST', headers: { 'X-HTTP-Method-Override': 'PUT' } });
         saving = false;
         closeOrderDetails();
         await load();
@@ -362,7 +395,7 @@ async function markPaid(order) {
     } finally {
         saving = false;
         refresh.disabled = false;
-        document.querySelectorAll('.advance,.payment-action').forEach(b => b.disabled = false);
+        document.querySelectorAll('.advance,.payment-action').forEach(b => b.disabled = b.classList.contains('completion-unpaid'));
     }
 }
 

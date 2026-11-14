@@ -18,7 +18,7 @@ jobs:
     environment: production
     steps:
       - uses: actions/checkout@v4
-      - name: Inspect production FTPS and baseline read-only
+      - name: Verify production FTPS account and site folder read-only
         env:
           LIVE_FTPS_HOST: ${{ secrets.LIVE_FTPS_HOST }}
           LIVE_FTPS_USERNAME: ${{ secrets.LIVE_FTPS_USERNAME }}

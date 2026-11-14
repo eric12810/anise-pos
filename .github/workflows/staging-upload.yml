@@ -1,13 +1,18 @@
 name: POS staging FTPS
 
 on:
+  push:
+    branches: [staging]
+  pull_request:
+    branches: [main, staging]
   workflow_dispatch:
     inputs:
       mode:
-        description: Check connection or upload to staging
+        description: Select a staging operation
         type: choice
-        options: [check, deploy]
-        default: check
+        options: [deploy, check, dry-run]
+        default: deploy
+        required: true
 
 permissions:
   contents: read
@@ -16,36 +21,104 @@ concurrency:
   group: pos-staging-ftps
   cancel-in-progress: false
 
+env:
+  DOTNET_VERSION: '9.0.x'
+
 jobs:
-  staging:
-    if: github.ref == 'refs/heads/staging'
+  validate:
+    name: Build, test and validate package
+    if: >-
+      github.event_name != 'workflow_dispatch' || inputs.mode != 'check'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          # The read-only checkout token is needed by the branch-head safety
+          # check below. It is not an FTPS credential and is never logged.
+          persist-credentials: true
+      - name: Verify staging commit is current
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/staging')
+        run: |
+          git fetch --no-tags --depth=1 origin staging
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/staging)"
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      - name: Restore .NET dependencies
+        run: dotnet restore AnisePOS.sln
+      - name: Build Release solution
+        run: dotnet build AnisePOS.sln --configuration Release --no-restore
+      - name: Run application checks
+        run: dotnet run --project tests/AnisePOS.Checks --configuration Release --no-build
+      - name: Run deployment safeguard tests
+        run: python3 -m unittest discover -s tests/deployment -v
+      - name: Preflight SQL migrations without database access
+        run: python3 scripts/check-migrations.py
+      - name: Publish staging API
+        run: >-
+          dotnet publish src/AnisePOS.Api/AnisePOS.Api.csproj
+          --configuration Release --no-restore --no-self-contained
+          -p:UseAppHost=false --output artifacts/staging
+      - name: Minify and compress publish assets
+        run: python3 scripts/build-web-assets.py artifacts/staging/wwwroot
+      - name: Validate package and create manifest
+        run: python3 scripts/review-staging-package.py
+      - name: Store exact validated package
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: anise-pos-staging-${{ github.sha }}
+          path: artifacts/staging
+          if-no-files-found: error
+          retention-days: 90
+
+  ftps-check:
+    name: Check staging FTPS
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'check' && github.ref == 'refs/heads/staging'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '9.0.x'
-      - name: Build and check
-        run: |
-          dotnet build AnisePOS.sln --configuration Release
-          dotnet run --project tests/AnisePOS.Checks --configuration Release --no-build
-          python3 -m unittest discover -s tests/deployment -v
-      - name: Prepare reviewed package
-        run: |
-          dotnet publish src/AnisePOS.Api/AnisePOS.Api.csproj --configuration Release --no-restore --no-self-contained -p:UseAppHost=false --output artifacts/staging
-          python3 scripts/review-staging-package.py
-      - name: Explicit FTPS operation
+      - name: Check encrypted staging connection
         env:
           STAGING_FTPS_HOST: ${{ secrets.STAGING_FTPS_HOST }}
           STAGING_FTPS_USERNAME: ${{ secrets.STAGING_FTPS_USERNAME }}
           STAGING_FTPS_PASSWORD: ${{ secrets.STAGING_FTPS_PASSWORD }}
-          MODE: ${{ inputs.mode }}
-        run: |
-          if [ "$MODE" = deploy ]; then
-            python3 scripts/upload-staging.py --deploy
-          else
-            python3 scripts/upload-staging.py
-          fi
+        run: python3 scripts/upload-staging.py
+
+  deploy:
+    name: Deploy staging FTPS
+    needs: validate
+    if: >-
+      needs.validate.result == 'success' &&
+      ((github.event_name == 'push' && github.ref == 'refs/heads/staging') ||
+       (github.event_name == 'workflow_dispatch' && inputs.mode == 'deploy' && github.ref == 'refs/heads/staging'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Download exact validated package
+        uses: actions/download-artifact@v4
+        with:
+          name: anise-pos-staging-${{ github.sha }}
+          path: artifacts/staging
+      - name: Prepare immutable package manifest
+        run: cp artifacts/staging/release-manifest.sha256 artifacts/staging-manifest.sha256
+      - name: Upload validated package to staging FTPS
+        env:
+          STAGING_FTPS_HOST: ${{ secrets.STAGING_FTPS_HOST }}
+          STAGING_FTPS_USERNAME: ${{ secrets.STAGING_FTPS_USERNAME }}
+          STAGING_FTPS_PASSWORD: ${{ secrets.STAGING_FTPS_PASSWORD }}
+        run: python3 scripts/upload-staging.py --deploy
+      - name: Verify staging POS health
+        run: curl --fail --silent --show-error --max-time 20 https://pos-staging.loveanise.co.uk/health > /dev/null

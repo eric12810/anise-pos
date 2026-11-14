@@ -1,0 +1,13 @@
+{
+  "001_initial_schema.sql": "576534aa528f49e2247e32885c4c9231fdff811add25e83ef2148a88e3695180",
+  "002_staff_users.sql": "06f22e424ffd20a7f06567a575dda78a51e74017e1a519f282d8f70f525e8fc9",
+  "003_import_pdf_menu.sql": "3d7adf2f3a81167ec769697dbd864993aec2a408b78c4241cd5bef8cb5e2de94",
+  "004_custom_order_fee.sql": "07a570490416b236a5043179efdd622cdc97f993f197ab8282ac1cfe506b0176",
+  "005_product_vegan.sql": "5cce9a601cd919a6d1d64fea43dc4b0459dc10a0510fad4a1d18443dc4f81d4e",
+  "006_product_categories.sql": "f8e99f98aca06273683c01e119dab6eb587e065544e3a40eba60f9446b74eff8",
+  "007_product_chinese_name.sql": "0a5f444413d67ebdc15a9a6287f1c5d9b722e82528f64096fc8cb20a141bd0b7",
+  "008_product_images.sql": "5d0df4e79265efa4c27966e0f40c4e7762e6dc6b48b75697885b72b7a8d9cf50",
+  "009_category_product_order.sql": "aa6b032adbc821610b53f5e7f42f8012de1e44bbaec7f80ff5376420fdd9f67a",
+  "010_order_lifecycle.sql": "6b8bda54f01669104f3bad0f8dcadedfa0e4f9f280c7d520963c0b278b005d7f",
+  "011_website_stripe_reconciliation.sql": "28cb172e7587a2a0d0fa04af4296db235d0ab543a9339a9b08c37c9e6ca43e93"
+}

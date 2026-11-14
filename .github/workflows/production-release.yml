@@ -2,7 +2,7 @@ name: POS production release
 on:
   workflow_dispatch:
     inputs:
-      staging_run_id: {description: 'Exact successful staging dry-run ID', required: true, type: string}
+      staging_run_id: {description: 'Exact successful staging deployment Run ID', required: true, type: string}
 permissions: {contents: read, actions: read}
 concurrency: {group: anise-pos-production, cancel-in-progress: false}
 jobs:
@@ -13,7 +13,7 @@ jobs:
     environment: production
     steps:
       - uses: actions/checkout@v4
-      - name: Resolve approved staging dry run
+      - name: Resolve verified staging deployment
         id: resolve
         env: {GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}', STAGING_RUN_ID: '${{ inputs.staging_run_id }}'}
         run: python3 scripts/resolve-staging-release.py

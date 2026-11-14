@@ -7,9 +7,11 @@ using AnisePOS.Api.Notifications;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.AspNetCore.RateLimiting;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
+using AnisePOS.Api.Diagnostics;
 
 var builder = WebApplication.CreateBuilder(args);
 var dataProtectionPath = Path.GetFullPath(Path.Combine(builder.Environment.ContentRootPath, "..", "data", "data-protection-keys"));
@@ -27,9 +29,11 @@ builder.Services.AddDbContext<AniseDbContext>(options =>
 builder.Services.AddCors(WebsiteCors.Configure);
 builder.Services.AddProblemDetails();
 builder.Services.AddHttpClient();
+builder.Services.AddSingleton<GoogleRouteDiagnosticState>();
 builder.Services.AddSingleton<GoogleMailTokenStore>();
 builder.Services.AddSingleton<GmailConfirmationSender>();
 builder.Services.AddHostedService<WebsiteConfirmationWorker>();
+builder.Services.AddHostedService<WebsiteStripeReconciliationWorker>();
 builder.Services.AddSingleton<PushKeyStore>();
 builder.Services.AddHostedService<StaffPushWorker>();
 builder.Services.AddSingleton<ReceiptPrinter>();
@@ -75,10 +79,57 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
 builder.Services.AddAuthorizationBuilder()
     .AddPolicy("ManageMenu", policy => policy.RequireRole("Owner", "Manager"))
     .AddPolicy("ViewReports", policy => policy.RequireRole("Owner", "Manager"))
-    .AddPolicy("ManageStaff", policy => policy.RequireRole("Owner"));
+    .AddPolicy("ManageStaff", policy => policy.RequireRole("Owner"))
+    .AddPolicy("GoogleRoutesDiagnosticOwner", policy => policy.RequireRole("Owner"));
 
 var app = builder.Build();
 
+// Production schema changes are reviewed and applied before deployment.
+// Keep the legacy bootstrap for staging until its structures have dedicated migrations.
+if (app.Environment.IsProduction())
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    var db = scope.ServiceProvider.GetRequiredService<AniseDbContext>();
+    var existingColumns = (await db.Database.SqlQueryRaw<string>("""
+        SELECT CONCAT(s.name, N'.', t.name, N'.', c.name) AS Value
+        FROM sys.schemas AS s
+        JOIN sys.tables AS t ON t.schema_id = s.schema_id
+        JOIN sys.columns AS c ON c.object_id = t.object_id
+        """).ToListAsync()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+    var missingMappedColumns = db.Model.GetEntityTypes()
+        .Where(entity => entity.GetTableName() is not null)
+        .SelectMany(entity =>
+        {
+            var table = entity.GetTableName()!;
+            var schema = entity.GetSchema() ?? "dbo";
+            var store = StoreObjectIdentifier.Table(table, schema);
+            return entity.GetProperties().Select(property =>
+                $"{schema}.{table}.{property.GetColumnName(store)}");
+        })
+        .Where(column => !existingColumns.Contains(column));
+    var missing = await db.Database.SqlQueryRaw<string>("""
+        SELECT Requirement AS Value
+        FROM (VALUES
+            (N'dbo.Orders', N'CancelledAtUtc', CAST(NULL AS nvarchar(128))),
+            (N'dbo.Orders', N'CancellationReason', NULL),
+            (N'dbo.Orders', N'ReopenedAtUtc', NULL),
+            (N'dbo.Refunds', N'Id', NULL),
+            (N'dbo.WebsiteCheckouts', N'ReconciliationError', NULL),
+            (N'dbo.WebsiteCheckouts', N'ReconciliationCheckedAtUtc', NULL),
+            (N'dbo.Payments', CAST(NULL AS nvarchar(128)), N'UX_Payments_StripeCheckout_Reference')
+        ) AS required(TableName, ColumnName, IndexName)
+        CROSS APPLY (SELECT CONCAT(required.TableName, N'.', COALESCE(required.ColumnName, required.IndexName)) AS Requirement) AS label
+        WHERE OBJECT_ID(required.TableName, N'U') IS NULL
+           OR (required.ColumnName IS NOT NULL AND COL_LENGTH(required.TableName, required.ColumnName) IS NULL)
+           OR (required.IndexName IS NOT NULL AND NOT EXISTS (
+               SELECT 1 FROM sys.indexes AS i
+               WHERE i.object_id = OBJECT_ID(required.TableName, N'U') AND i.name = required.IndexName))
+        """).ToListAsync();
+    missing.AddRange(missingMappedColumns);
+    if (missing.Count > 0)
+        throw new InvalidOperationException("Production database schema is incomplete: " + string.Join(", ", missing));
+}
+else
 await using (var scope = app.Services.CreateAsyncScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AniseDbContext>();
@@ -182,7 +233,7 @@ app.UseStaticFiles(new StaticFileOptions
 {
     OnPrepareResponse = context =>
     {
-        if (context.File.Name is "pos.html" or "orders.html" or "orders.js")
+        if (context.File.Name is "pos.html" or "orders.html" or "orders.js" or "receipt.html")
             context.Context.Response.Headers.CacheControl = "no-cache";
     }
 });
@@ -199,11 +250,13 @@ app.MapWebsiteOrderEndpoints();
 app.MapGoogleMailOAuthEndpoints();
 app.MapWebsiteStripeWebhook();
 app.MapOrderQueueEndpoints();
+app.MapOrderLifecycleEndpoints();
 app.MapStaffPushEndpoints();
 
 app.MapReportEndpoints();
 app.MapAdminEndpoints();
 app.MapPromotionEndpoints();
 app.MapStaffAuthEndpoints();
+app.MapInternalDiagnosticsEndpoints();
 
 app.Run();

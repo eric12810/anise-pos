@@ -8,6 +8,12 @@ public static class AdminEndpoints
 {
     public static void MapAdminEndpoints(this IEndpointRouteBuilder app)
     {
+        app.MapGet("/api/admin/stripe-checkout-alerts", async (AniseDbContext db, CancellationToken ct) =>
+            Results.Ok(await db.WebsiteCheckouts.AsNoTracking()
+                .Where(c => c.CompletedOrderId == null && c.ReconciliationError != null)
+                .OrderByDescending(c => c.ReconciliationCheckedAtUtc).Take(20)
+                .Select(c => new { c.Id, c.CreatedAtUtc, c.ReconciliationError, c.ReconciliationCheckedAtUtc })
+                .ToListAsync(ct))).RequireAuthorization("ManageMenu");
         app.MapGet("/api/admin/ordering-availability", async (AniseDbContext db, CancellationToken ct) =>
             (await OrderingAvailability.Get(db, ct)) is { } settings ? Results.Ok(settings) : Results.Problem("Ordering settings are unavailable.", statusCode: 503)).RequireAuthorization("ManageMenu");
         app.MapPut("/api/admin/ordering-availability", async (OrderingSettings settings, AniseDbContext db, IConfiguration config, CancellationToken ct) =>

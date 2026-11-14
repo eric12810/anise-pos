@@ -4,6 +4,8 @@ import importlib.util
 import json
 from pathlib import Path
 import subprocess
+import sys
+import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -164,7 +166,7 @@ class DirectoryTests(unittest.TestCase):
 
 
 class PosAssetTests(unittest.TestCase):
-    def test_precompressed_pos_page_matches_hybrid_source(self):
+    def test_build_generates_valid_minified_and_compressed_assets(self):
         root = Path('src/AnisePOS.Api/wwwroot')
         source = (root / 'pos.html').read_bytes()
         source_text = source.decode('utf-8')
@@ -172,15 +174,24 @@ class PosAssetTests(unittest.TestCase):
                        'special-instructions', 'custom-quantity', 'notes:l.instructions||null'):
             self.assertIn(marker, source_text)
         self.assertNotIn('onclick=()=>openProduct(cat.products', source_text)
+        self.assertFalse(list(root.glob('*.gz')))
+        self.assertFalse(list(root.glob('*.br')))
 
-        with gzip.open(root / 'pos.html.gz', 'rb') as compressed:
-            self.assertEqual(compressed.read(), source)
-
-        try:
+        with tempfile.TemporaryDirectory() as directory:
+            generated = Path(directory) / 'wwwroot'
+            generated.mkdir()
+            shutil.copy2(root / 'pos.html', generated / 'pos.html')
+            subprocess.run(
+                [sys.executable, 'scripts/build-web-assets.py', str(generated)],
+                check=True,
+            )
+            self.assertEqual((root / 'pos.html').read_bytes(), source)
+            built = (generated / 'pos.html').read_bytes()
+            self.assertNotEqual(built, source)
+            with gzip.open(generated / 'pos.html.gz', 'rb') as compressed:
+                self.assertEqual(compressed.read(), built)
             brotli = subprocess.run(
-                ['brotli', '--decompress', '--stdout', str(root / 'pos.html.br')],
+                ['brotli', '--decompress', '--stdout', str(generated / 'pos.html.br')],
                 check=True, capture_output=True,
             ).stdout
-        except (FileNotFoundError, subprocess.CalledProcessError):
-            self.skipTest('brotli CLI is not installed')
-        self.assertEqual(brotli, source)
+            self.assertEqual(brotli, built)

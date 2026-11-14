@@ -130,6 +130,25 @@ public sealed class Order : Entity
     public ICollection<OrderLine> Lines { get; set; } = new List<OrderLine>();
     public ICollection<Payment> Payments { get; set; } = new List<Payment>();
     public ICollection<OrderStatusHistory> StatusHistory { get; set; } = new List<OrderStatusHistory>();
+    public DateTimeOffset? CancelledAtUtc { get; set; }
+    public string? CancellationReason { get; set; }
+    public DateTimeOffset? ReopenedAtUtc { get; set; }
+    public ICollection<Refund> Refunds { get; set; } = new List<Refund>();
+}
+
+public enum RefundStatus { Pending, Completed, Failed }
+
+public sealed class Refund : Entity
+{
+    public Guid OrderId { get; set; }
+    public Order Order { get; set; } = null!;
+    public decimal Amount { get; set; }
+    public PaymentMethod Method { get; set; }
+    public RefundStatus Status { get; set; } = RefundStatus.Pending;
+    public string Reason { get; set; } = string.Empty;
+    public string? ProviderReference { get; set; }
+    public DateTimeOffset? CompletedAtUtc { get; set; }
+    public string? Note { get; set; }
 }
 
 public sealed class WebsiteConfirmation : Entity
@@ -165,6 +184,8 @@ public sealed class OrderLine : Entity
     public Guid? ProductId { get; set; }
     public Guid? ProductVariantId { get; set; }
     public string ProductName { get; set; } = string.Empty;
+    // Receipt-time projection only; deliberately ignored by EF and not persisted.
+    public bool IsVegan { get; set; }
     public string VariantName { get; set; } = string.Empty;
     public decimal UnitPrice { get; set; }
     public int Quantity { get; set; }
@@ -221,6 +242,8 @@ public sealed class WebsiteCheckout : Entity
     public string? StripeSessionId { get; set; }
     public string? StripeSessionUrl { get; set; }
     public Guid? CompletedOrderId { get; set; }
+    public string? ReconciliationError { get; set; }
+    public DateTimeOffset? ReconciliationCheckedAtUtc { get; set; }
 }
 
 public sealed class DeliverySettings

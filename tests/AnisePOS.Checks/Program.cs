@@ -6,8 +6,53 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Cors.Infrastructure;
 using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Configuration;
 using System.Security.Cryptography;
 using WebPush;
+
+var day1 = new DateTimeOffset(2026, 11, 12, 0, 0, 0, TimeSpan.Zero);
+var day2 = day1.AddDays(1);
+var confirmedPayment = ReportEndpoints.IsConfirmedPayment.Compile();
+if (confirmedPayment(new Payment { Status = PaymentStatus.Pending, PaidAtUtc = day1, Amount = 99m }) ||
+    confirmedPayment(new Payment { Status = PaymentStatus.Paid, Amount = 99m }) ||
+    !confirmedPayment(new Payment { Status = PaymentStatus.Paid, PaidAtUtc = day2, Amount = 10m }) ||
+    !confirmedPayment(new Payment { Status = PaymentStatus.RefundPending, PaidAtUtc = day1, Amount = 10m }) ||
+    !confirmedPayment(new Payment { Status = PaymentStatus.Refunded, PaidAtUtc = day1, Amount = 10m }))
+    throw new Exception("Confirmed payment eligibility checks failed.");
+var reportOrders = new[]
+{
+    new ReportEndpoints.ReportOrder(day1.AddHours(10), OrderType.Collection, OrderStatus.Completed, 10m, true),
+    new ReportEndpoints.ReportOrder(day1.AddHours(11), OrderType.Delivery, OrderStatus.Cancelled, 20m, true),
+    new ReportEndpoints.ReportOrder(day1.AddHours(12), OrderType.Collection, OrderStatus.Ready, 8m, false),
+    new ReportEndpoints.ReportOrder(day2.AddHours(9), OrderType.Delivery, OrderStatus.Completed, 15m, true)
+};
+var reportPayments = new[]
+{
+    new ReportEndpoints.ReportPayment(day2.AddHours(1), PaymentMethod.Cash, 10m),
+    new ReportEndpoints.ReportPayment(day1.AddHours(11), PaymentMethod.Card, 20m),
+    new ReportEndpoints.ReportPayment(day2.AddHours(9), PaymentMethod.Online, 15m)
+};
+var reportRefunds = new[]
+{
+    new ReportEndpoints.ReportRefund(day1.AddHours(12), day2.AddHours(2), PaymentMethod.Card, RefundStatus.Completed, 5m),
+    new ReportEndpoints.ReportRefund(day2.AddHours(3), day2.AddHours(3), PaymentMethod.Card, RefundStatus.Completed, 7m),
+    new ReportEndpoints.ReportRefund(day2.AddHours(4), null, PaymentMethod.Card, RefundStatus.Pending, 8m)
+};
+var firstReport = ReportEndpoints.Calculate(day1, day2, 0, reportOrders, reportPayments, reportRefunds);
+var secondReport = ReportEndpoints.Calculate(day2, day2.AddDays(1), 0, reportOrders, reportPayments, reportRefunds);
+var boundaryReport = ReportEndpoints.Calculate(day1, day2, 60, reportOrders,
+    [new ReportEndpoints.ReportPayment(day1.AddMinutes(30), PaymentMethod.Cash, 4m)], []);
+if (boundaryReport.Days.Any(d => d.PaidSales == 4m && d.Date != DateOnly.FromDateTime(day1.AddDays(-1).Date)))
+    throw new Exception("Trading-day offset check failed.");
+if (firstReport.OrderCount != 2 || firstReport.CollectionOrders != 2 || firstReport.DeliveryOrders != 0 ||
+    firstReport.GrossSales != 18m || firstReport.PendingSales != 8m || firstReport.CashSales != 0m ||
+    firstReport.CardSales != 20m || firstReport.CompletedRefunds != 0m || firstReport.NetPaidTakings != 20m ||
+    firstReport.CancelledOrders != 1 || firstReport.Days.Single().PaidSales != 20m ||
+    secondReport.OrderCount != 1 || secondReport.CashSales != 10m || secondReport.CardSales != 15m ||
+    secondReport.CompletedRefunds != 12m || secondReport.PendingRefunds != 8m ||
+    secondReport.NetPaidTakings != 13m || secondReport.Days.Single().PaidSales != 25m)
+    throw new Exception("Payment, cancelled order, partial refund or trading-day reporting checks failed.");
+Console.WriteLine("Passed payment-date, refund-date, cancelled order, partial refund and unpaid-order reporting checks.");
 
 var corsOptions = new CorsOptions();
 WebsiteCors.Configure(corsOptions);
@@ -137,7 +182,7 @@ if (!WebsiteCheckoutValidation.ValidName("Jean O’Neil") || WebsiteCheckoutVali
 Console.WriteLine("Passed customer details validation checks.");
 
 var checkoutId = Guid.NewGuid();
-var eventJson = System.Text.Json.JsonSerializer.Serialize(new { type = "checkout.session.completed", livemode = false, data = new { @object = new { @object = "checkout.session", id = "cs_test_123", payment_status = "paid", currency = "gbp", amount_total = 1850, client_reference_id = checkoutId.ToString() } } });
+var eventJson = System.Text.Json.JsonSerializer.Serialize(new { type = "checkout.session.completed", livemode = false, data = new { @object = new { @object = "checkout.session", livemode = false, id = "cs_test_123", payment_status = "paid", currency = "gbp", amount_total = 1850, client_reference_id = checkoutId.ToString() } } });
 using (var validEvent = System.Text.Json.JsonDocument.Parse(eventJson))
 {
     var paidSession = WebsiteStripeWebhook.ReadPaidSession(validEvent.RootElement);
@@ -151,6 +196,38 @@ foreach (var invalid in new[] { eventJson.Replace("\"paid\"", "\"unpaid\""), eve
         throw new Exception("Invalid Stripe webhook was accepted.");
 }
 Console.WriteLine("Passed paid Stripe webhook event validation checks.");
+
+var liveEventJson = eventJson.Replace("cs_test_123", "cs_live_123").Replace("\"livemode\":false", "\"livemode\":true");
+using (var liveEvent = System.Text.Json.JsonDocument.Parse(liveEventJson))
+{
+    if (WebsiteStripeWebhook.ReadPaidSession(liveEvent.RootElement, true)?.CheckoutId != checkoutId ||
+        WebsiteStripeWebhook.ReadPaidSession(liveEvent.RootElement, false) is not null)
+        throw new Exception("Live Stripe webhook mode isolation failed.");
+}
+var liveConfig = new Microsoft.Extensions.Configuration.ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> {
+    ["WebsiteCheckout:StripeMode"] = "live", ["Stripe:SecretKey"] = "sk_live_example",
+    ["WebsiteCheckout:StripeWebhookSecret"] = "whsec_example",
+    ["WebsiteCheckout:StripeSuccessUrl"] = "https://www.loveanise.co.uk/order-status.html",
+    ["WebsiteCheckout:StripeCancelUrl"] = "https://www.loveanise.co.uk/stripe-cancelled.html"
+}).Build();
+var productionHost = new TestPushEnvironment { EnvironmentName = "Production" };
+var stagingHost = new TestPushEnvironment { EnvironmentName = "Staging" };
+if (WebsiteStripeMode.From(liveConfig, productionHost)?.Live != true || WebsiteStripeMode.From(liveConfig, stagingHost) is not null)
+    throw new Exception("Live Stripe configuration isolation failed.");
+liveConfig["Stripe:SecretKey"] = "sk_test_example";
+if (WebsiteStripeMode.From(liveConfig, productionHost) is not null)
+    throw new Exception("Production accepted test Stripe keys.");
+Console.WriteLine("Passed live/test Stripe configuration isolation checks.");
+var directSessionJson = System.Text.Json.JsonSerializer.Serialize(new { id = "cs_test_123", livemode = false,
+    payment_status = "paid", currency = "gbp", amount_total = 1850, client_reference_id = checkoutId.ToString("D") });
+using (var directSession = System.Text.Json.JsonDocument.Parse(directSessionJson))
+{
+    if (!WebsiteStripeReconciliationWorker.TryPaidSession(directSession.RootElement, checkoutId, new WebsiteStripeMode(false), out var recovered) || recovered?.AmountPence != 1850 ||
+        WebsiteStripeReconciliationWorker.TryPaidSession(directSession.RootElement, checkoutId, new WebsiteStripeMode(true), out _) ||
+        WebsiteStripeReconciliationWorker.TryPaidSession(directSession.RootElement, Guid.NewGuid(), new WebsiteStripeMode(false), out _))
+        throw new Exception("Stripe reconciliation identity or mode checks failed.");
+}
+Console.WriteLine("Passed direct Stripe reconciliation identity checks.");
 
 var refundSession = System.Text.Json.JsonSerializer.Serialize(new { id = "cs_test_123", livemode = false, currency = "gbp", amount_total = 650,
     payment_intent = new { latest_charge = new { id = "ch_test_123", currency = "gbp", amount = 650, amount_refunded = 650, refunded = true } } });
@@ -186,6 +263,19 @@ if (!receipt.Subject.Contains("#42 received") || !receipt.Body.Contains("awaitin
     !receipt.Body.Contains("https://example.test/#secret") || !receipt.Body.Contains("expires 24 hours after ordering"))
     throw new Exception("Initial order receipt must include the private tracking link and its expiry.");
 
+var veganLine = new OrderLine { ProductName = "Vegetable Spring Rolls", VariantName = "Regular", Quantity = 2, IsVegan = true,
+    Notes = "Extra crispy", Modifiers = new List<OrderLineModifier> { new() { ModifierName = "Chilli sauce" } } };
+var chickenLine = new OrderLine { ProductName = "Chicken Chow Mein", VariantName = "Regular", Quantity = 1 };
+var kitchenTicket = AnisePOS.Api.Printing.ReceiptPrinter.Format(new Order { OrderNumber = 7, Lines = new List<OrderLine> { veganLine, chickenLine } }, true);
+var kitchenText = System.Text.Encoding.ASCII.GetString(kitchenTicket);
+if (!kitchenText.Contains("2 x [V] Vegetable Spring Rolls") || !kitchenText.Contains("1 x Chicken Chow Mein") ||
+    !kitchenText.Contains("  + Chilli sauce") || !kitchenText.Contains("  NOTE: Extra crispy") || kitchenText.Contains("? Vegetable"))
+    throw new Exception("Kitchen receipt vegan marker or line details failed.");
+var customerReceipt = System.Text.Encoding.ASCII.GetString(AnisePOS.Api.Printing.ReceiptPrinter.Format(new Order { OrderNumber = 8, Lines = new List<OrderLine> { veganLine } }, false));
+if (customerReceipt.Contains("[V]") || !customerReceipt.Contains("2 x Vegetable Spring Rolls"))
+    throw new Exception("Customer receipt vegan formatting changed unexpectedly.");
+Console.WriteLine("Passed vegan kitchen receipt and customer receipt compatibility checks.");
+
 var sectorSettings = new DeliverySettings { RadiusMiles = 1, Fee = 2m, SectorsJson = System.Text.Json.JsonSerializer.Serialize(new[] { new DeliverySector("NW1 8", 3.50m), new DeliverySector("N1 1", 0m) }) };
 var nearby = DeliverySettingsForWebsite.Decide(sectorSettings, "nw1 8et", 51.5434592, -0.1492259);
 var lowerSector = DeliverySettingsForWebsite.Decide(sectorSettings, "N1 1AA", 51.5434592, -0.1492259);
@@ -198,6 +288,19 @@ if (DeliverySettingsForWebsite.NormalizeSector(" nw1 8 ") != "NW1 8" ||
     DeliverySettingsForWebsite.Decide(sectorSettings, "NW1 8ET", 51.60, -0.1492259) != null)
     throw new Exception("Delivery distance, sector and approval checks failed.");
 Console.WriteLine("Passed delivery distance, postcode fee and approval checks.");
+
+var permissionError = CommerceEndpoints.ParseGoogleRouteError("{\"error\":{\"status\":\"PERMISSION_DENIED\",\"message\":\"Requests from IP 203.0.113.10 to NW3 3AX are blocked\"}}");
+if (permissionError.Status != "PERMISSION_DENIED" ||
+    CommerceEndpoints.ClassifyGoogleRouteError(403, permissionError.Status) != "ApiRestriction" ||
+    !CommerceEndpoints.SanitizeGoogleRouteMessage(permissionError.Message, "NW3 3AX", null).Contains("[redacted-destination]") ||
+    CommerceEndpoints.ClassifyGoogleRouteError(400, "INVALID_ARGUMENT") != "InvalidRequest" ||
+    CommerceEndpoints.ClassifyGoogleRouteError(429, "RESOURCE_EXHAUSTED") != "Quota" ||
+    CommerceEndpoints.ClassifyGoogleRouteError(503, "UNAVAILABLE") != "NetworkOrGoogleUnavailable")
+    throw new Exception("Google Routes error parsing or categorisation checks failed.");
+if (!System.Text.Json.JsonSerializer.Serialize(new DrivingRouteRequest("NW3 3AX", null, null)).Contains("NW3 3AX") ||
+    !System.Text.Json.JsonSerializer.Serialize(new DrivingRouteRequest(null, null, "ChIJtest-place-id")).Contains("ChIJtest-place-id"))
+    throw new Exception("Google Routes postcode and Place ID request checks failed.");
+Console.WriteLine("Passed Google Routes error, postcode-only and Place ID request checks.");
 var bandSettings = new DeliverySettings { RadiusMiles = 2, Fee = 4m, RadiusBandsJson = System.Text.Json.JsonSerializer.Serialize(new[] { new DeliveryRadiusBand(2, 4m), new DeliveryRadiusBand(1, 2m) }), SectorsJson = sectorSettings.SectorsJson };
 var innerBand = DeliverySettingsForWebsite.Decide(bandSettings, "NW1 9AA", 51.5434592, -0.1492259);
 var outerBand = DeliverySettingsForWebsite.Decide(bandSettings, "NW1 9AA", 51.565, -0.1492259);
@@ -268,6 +371,9 @@ var paymentId = Guid.NewGuid();
 var successfulHandler = new RefundHandler(testSessionUnrefunded, noRefunds, "{}", testSessionRefunded, doneRefunds);
 var successfulResult = await WebsiteStripeRefund.EnsureRefundedAsync(new HttpClient(successfulHandler), "sk_test_example", "cs_test_123", paymentId, 6.50m, CancellationToken.None);
 if (successfulResult != WebsiteStripeRefund.Result.Complete || successfulHandler.PostCount != 1 || successfulHandler.IdempotencyKey != "website-decline-refund-" + paymentId.ToString("N")) throw new Exception("Automatic Stripe refund failed.");
+var liveRefundHandler = new RefundHandler(testSessionUnrefunded.Replace("cs_test_", "cs_live_").Replace("\"livemode\":false", "\"livemode\":true"), noRefunds, "{}", testSessionRefunded.Replace("cs_test_", "cs_live_").Replace("\"livemode\":false", "\"livemode\":true"), doneRefunds);
+if (await WebsiteStripeRefund.EnsureRefundedAsync(new HttpClient(liveRefundHandler), "sk_live_example", "cs_live_123", paymentId, 6.50m, CancellationToken.None, true) != WebsiteStripeRefund.Result.Complete || liveRefundHandler.PostCount != 1)
+    throw new Exception("Live website refund validation failed.");
 var retryHandler = new RefundHandler(testSessionRefunded, doneRefunds);
 if (await WebsiteStripeRefund.EnsureRefundedAsync(new HttpClient(retryHandler), "sk_test_example", "cs_test_123", paymentId, 6.50m, CancellationToken.None) != WebsiteStripeRefund.Result.Complete || retryHandler.PostCount != 0) throw new Exception("Refund reconciliation repeated a refund.");
 var pendingHandler = new RefundHandler(testSessionUnrefunded, pendingRefunds);
