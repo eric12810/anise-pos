@@ -91,6 +91,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
+      - name: Confirm protected production backup gate
+        env:
+          PROD_BACKUP_CONFIRMED: ${{ secrets.PROD_BACKUP_CONFIRMED }}
+        run: test "$PROD_BACKUP_CONFIRMED" = true
       - name: Resolve exact approved staging artifact
         id: resolve
         env:
