@@ -7,11 +7,16 @@ import re
 import ssl
 import subprocess
 from urllib.parse import quote
+from urllib.parse import urlparse
+import xml.etree.ElementTree as ET
 
 EXPECTED_USER = 'liveposftp'
 EXPECTED_ROOT = '/wwwroot'
 REQUIRED_FILES = {'web.config', 'AnisePOS.Api.dll'}
 MANIFEST = '.anise-pos-production-deployment.json'
+STRIPE_SETTINGS = {'WebsiteCheckout__StripeSessionsEnabled', 'WebsiteCheckout__StripeMode',
+                   'Stripe__SecretKey', 'WebsiteCheckout__StripeWebhookSecret',
+                   'WebsiteCheckout__StripeSuccessUrl', 'WebsiteCheckout__StripeCancelUrl'}
 
 
 def required_config():
@@ -94,6 +99,37 @@ def curl_manifest(config):
     print('PASS: production deployment manifest identifies pos.loveanise.co.uk; ' + str(len(files)) + ' managed files')
 
 
+def curl_web_config(config):
+    credentials = config['LIVE_FTPS_USERNAME'] + ':' + config['LIVE_FTPS_PASSWORD']
+    escaped = credentials.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r')
+    result = subprocess.run([
+        'curl', '--silent', '--show-error', '--fail', '--ssl-reqd', '--proto', '=ftp',
+        '--ftp-method', 'multicwd', '--connect-timeout', '20', '--max-time', '45',
+        '--max-filesize', '1048576', '--config', '-',
+        'ftp://' + config['LIVE_FTPS_HOST'] + ':21/wwwroot/web.config',
+    ], input=('user = "' + escaped + '"\n').encode(), capture_output=True, check=False)
+    if result.returncode:
+        raise RuntimeError('Read-only web.config retrieval failed (curl exit ' + str(result.returncode) + ')')
+    try:
+        root = ET.fromstring(result.stdout)
+        settings = {item.get('name'): item.get('value', '') for item in root.iter('environmentVariable')}
+    except ET.ParseError:
+        raise RuntimeError('Production web.config XML could not be parsed') from None
+    missing = sorted(STRIPE_SETTINGS - settings.keys())
+    print('web.config Stripe setting names: ' + (', '.join(sorted(STRIPE_SETTINGS & settings.keys())) or 'none'))
+    if missing:
+        raise RuntimeError('Required Stripe setting names absent from web.config: ' + ', '.join(missing))
+    if settings['WebsiteCheckout__StripeSessionsEnabled'].lower() != 'true' or settings['WebsiteCheckout__StripeMode'] != 'live':
+        raise RuntimeError('Stripe Checkout enable flag or mode is not production-ready')
+    if not settings['Stripe__SecretKey'].startswith('sk_live_') or not settings['WebsiteCheckout__StripeWebhookSecret'].startswith('whsec_'):
+        raise RuntimeError('Stripe secret entries are missing or have the wrong key type')
+    for name in ('WebsiteCheckout__StripeSuccessUrl', 'WebsiteCheckout__StripeCancelUrl'):
+        url = urlparse(settings[name])
+        if url.scheme != 'https' or url.hostname not in {'loveanise.co.uk', 'www.loveanise.co.uk'} or url.port is not None or url.username or url.password or url.fragment:
+            raise RuntimeError(name + ' is not an approved production URL')
+    print('PASS: web.config contains production Stripe Checkout settings with valid modes and URL hosts; values withheld')
+
+
 def python_probe(config, path):
     try:
         with ftplib.FTP_TLS(context=ssl.create_default_context(), timeout=45) as ftp:
@@ -136,6 +172,7 @@ def main():
     if MANIFEST not in site:
         raise RuntimeError('Production deployment manifest is missing from /wwwroot')
     curl_manifest(config)
+    curl_web_config(config)
     if not configured:
         raise RuntimeError('PROD_FTPS_ROOT differs from the verified /wwwroot destination')
     print('PASS: curl verified the production POS /wwwroot destination; Python comparison complete')
