@@ -157,10 +157,21 @@ class CurlFTP:
         self._command('MKD ' + self._path(path))
 
     def rename(self, old, new):
-        self._command('RNFR ' + self._path(old), 'RNTO ' + self._path(new))
+        source, destination = self._path(old), self._path(new)
+        if PurePosixPath(source).parent != PurePosixPath(destination).parent:
+            raise ValueError('FTP rename must stay in one approved directory')
+        # Curl sends ordinary --quote commands before it changes to the URL
+        # directory. Winserve expects names relative to that directory.
+        self._run(str(PurePosixPath(source).parent), listing=True, commands=(
+            '+RNFR ' + PurePosixPath(source).name,
+            '+RNTO ' + PurePosixPath(destination).name,
+        ))
 
     def delete(self, path):
-        self._command('DELE ' + self._path(path))
+        target = PurePosixPath(self._path(path))
+        self._run(str(target.parent), listing=True, commands=(
+            '+DELE ' + target.name,
+        ))
 
 
 def package_files(root, manifest):
