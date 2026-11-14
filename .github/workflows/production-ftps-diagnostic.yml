@@ -2,9 +2,24 @@ name: POS production FTPS diagnostic
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [diagnostic, release-verify, finalise-release]
+        default: diagnostic
+        required: true
+      staging_run_id:
+        description: Exact approved staging release run ID
+        required: false
+        type: string
+      production_approval:
+        description: Type FINALISE POS RELEASE 43576579126 for a separate finalisation request
+        required: false
+        type: string
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: anise-pos-production-ftps-diagnostic
@@ -12,7 +27,7 @@ concurrency:
 
 jobs:
   diagnostic:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && inputs.mode == 'diagnostic'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: production
@@ -25,3 +40,92 @@ jobs:
           LIVE_FTPS_PASSWORD: ${{ secrets.LIVE_FTPS_PASSWORD }}
           PROD_FTPS_ROOT: ${{ vars.PROD_FTPS_ROOT }}
         run: python3 scripts/production-ftps-diagnostic.py
+
+  release-verify:
+    if: github.ref == 'refs/heads/staging' && inputs.mode == 'release-verify' && inputs.staging_run_id == '43572186352'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Resolve exact approved staging artifact
+        id: resolve
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STAGING_RUN_ID: ${{ inputs.staging_run_id }}
+        run: python3 scripts/resolve-staging-release.py
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.staging_run_id }}
+          name: ${{ steps.resolve.outputs.artifact_name }}
+          path: artifacts/staging
+      - name: Read-only production manifest and file verification
+        env:
+          DEPLOYMENT_ENV: production
+          LIVE_FTPS_HOST: ${{ secrets.LIVE_FTPS_HOST }}
+          LIVE_FTPS_USERNAME: ${{ secrets.LIVE_FTPS_USERNAME }}
+          LIVE_FTPS_PASSWORD: ${{ secrets.LIVE_FTPS_PASSWORD }}
+          PROD_FTPS_ROOT: ${{ vars.PROD_FTPS_ROOT }}
+        run: python3 scripts/production-release-verify.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: production-release-verification-${{ github.run_id }}
+          path: production-release-verification.json
+          if-no-files-found: ignore
+          retention-days: 90
+
+  finalise-release:
+    if: >-
+      github.ref == 'refs/heads/staging' && inputs.mode == 'finalise-release' &&
+      inputs.staging_run_id == '43572186352' &&
+      inputs.production_approval == 'FINALISE POS RELEASE 43576579126'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment: production
+    concurrency: {group: anise-pos-production, cancel-in-progress: false}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Confirm protected production backup gate
+        env:
+          PROD_BACKUP_CONFIRMED: ${{ secrets.PROD_BACKUP_CONFIRMED }}
+        run: test "$PROD_BACKUP_CONFIRMED" = true
+      - name: Resolve exact approved staging artifact
+        id: resolve
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STAGING_RUN_ID: ${{ inputs.staging_run_id }}
+        run: python3 scripts/resolve-staging-release.py
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.staging_run_id }}
+          name: ${{ steps.resolve.outputs.artifact_name }}
+          path: artifacts/staging
+      - name: Recheck production manifests and every managed file read-only
+        env:
+          DEPLOYMENT_ENV: production
+          LIVE_FTPS_HOST: ${{ secrets.LIVE_FTPS_HOST }}
+          LIVE_FTPS_USERNAME: ${{ secrets.LIVE_FTPS_USERNAME }}
+          LIVE_FTPS_PASSWORD: ${{ secrets.LIVE_FTPS_PASSWORD }}
+          PROD_FTPS_ROOT: ${{ vars.PROD_FTPS_ROOT }}
+        run: python3 scripts/production-release-verify.py
+      - name: Finalise manifest and leave maintenance only after approval and recheck
+        env:
+          DEPLOYMENT_ENV: production
+          LIVE_FTPS_HOST: ${{ secrets.LIVE_FTPS_HOST }}
+          LIVE_FTPS_USERNAME: ${{ secrets.LIVE_FTPS_USERNAME }}
+          LIVE_FTPS_PASSWORD: ${{ secrets.LIVE_FTPS_PASSWORD }}
+          PROD_FTPS_ROOT: ${{ vars.PROD_FTPS_ROOT }}
+          PRODUCTION_APPROVAL: ${{ inputs.production_approval }}
+        run: >-
+          python3 scripts/production-release-finalise.py
+          --verification production-release-verification.json
+          --approval "$PRODUCTION_APPROVAL"
+      - name: Verify production POS health
+        run: curl --fail --silent --show-error --max-time 20 https://pos.loveanise.co.uk/health > /dev/null

@@ -31,6 +31,38 @@ def production_uploader_module():
     return module
 
 
+class CurlRenameTests(unittest.TestCase):
+    def test_rename_uses_names_after_curl_changes_directory(self):
+        module = production_uploader_module()
+        ftp = module.CurlFTP('example.invalid', 'liveposftp', 'secret',
+                             '/wwwroot', 'liveposftp', '/wwwroot')
+        ftp.cwd('/wwwroot')
+        with mock.patch.object(ftp, '_run') as run:
+            ftp.rename(module.DEPLOYED_MANIFEST, module.BACKUP_MANIFEST)
+        run.assert_called_once_with('/wwwroot', listing=True, commands=(
+            '+RNFR ' + module.DEPLOYED_MANIFEST,
+            '+RNTO ' + module.BACKUP_MANIFEST,
+        ))
+
+    def test_rename_refuses_cross_directory_move(self):
+        module = production_uploader_module()
+        ftp = module.CurlFTP('example.invalid', 'stageposftp', 'secret',
+                             '/stageposftp/wwwroot', 'stageposftp', '/stageposftp/wwwroot')
+        ftp.cwd('/stageposftp/wwwroot')
+        with self.assertRaisesRegex(ValueError, 'one approved directory'):
+            ftp.rename('one', 'sub/two')
+
+    def test_delete_uses_name_after_curl_changes_directory(self):
+        module = production_uploader_module()
+        ftp = module.CurlFTP('example.invalid', 'stageposftp', 'secret',
+                             '/stageposftp/wwwroot', 'stageposftp', '/stageposftp/wwwroot')
+        ftp.cwd('/stageposftp/wwwroot')
+        with mock.patch.object(ftp, '_run') as run:
+            ftp.delete('.anise-rename-probe-test.tmp')
+        run.assert_called_once_with('/stageposftp/wwwroot', listing=True,
+                                    commands=('+DELE .anise-rename-probe-test.tmp',))
+
+
 def baseline_module():
     spec = importlib.util.spec_from_file_location('production_baseline', BASELINE)
     module = importlib.util.module_from_spec(spec)
