@@ -1,8 +1,6 @@
 name: POS staging FTPS
 
 on:
-  push:
-    branches: [staging]
   pull_request:
     branches: [main, staging]
   workflow_dispatch:
@@ -10,15 +8,15 @@ on:
       mode:
         description: Select a staging operation
         type: choice
-        options: [deploy, check, dry-run, rename-test, v2-ftps-probe]
-        default: deploy
+        options: [check, dry-run, rename-test, v2-ftps-probe]
+        default: check
         required: true
 
 permissions:
   contents: read
 
 concurrency:
-  group: pos-staging-ftps
+  group: anise-pos-staging
   cancel-in-progress: false
 
 env:
@@ -132,34 +130,3 @@ jobs:
           V2_STAGING_DATABASE: anisedb
           V2_FTPS_PROBE_APPROVAL: PROBE STAGING FTPS
         run: python3 -m deployment.v2.cli ftps-probe --environment staging
-
-  deploy:
-    name: Deploy staging FTPS
-    needs: validate
-    if: >-
-      needs.validate.result == 'success' &&
-      ((github.event_name == 'push' && github.ref == 'refs/heads/staging') ||
-       (github.event_name == 'workflow_dispatch' && inputs.mode == 'deploy' && github.ref == 'refs/heads/staging'))
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    environment: staging
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - name: Download exact validated package
-        uses: actions/download-artifact@v4
-        with:
-          name: anise-pos-staging-${{ github.sha }}
-          path: artifacts/staging
-      - name: Prepare immutable package manifest
-        run: cp artifacts/staging/release-manifest.sha256 artifacts/staging-manifest.sha256
-      - name: Upload validated package to staging FTPS
-        env:
-          STAGING_FTPS_HOST: ${{ secrets.STAGING_FTPS_HOST }}
-          STAGING_FTPS_USERNAME: ${{ secrets.STAGING_FTPS_USERNAME }}
-          STAGING_FTPS_PASSWORD: ${{ secrets.STAGING_FTPS_PASSWORD }}
-        run: python3 scripts/upload-staging.py --deploy
-      - name: Verify staging POS health
-        run: curl --fail --silent --show-error --max-time 20 https://pos-staging.loveanise.co.uk/health > /dev/null
