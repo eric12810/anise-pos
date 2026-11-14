@@ -12,8 +12,9 @@ REQUIRED_FILES = {'web.config', 'AnisePOS.Api.dll'}
 def required_config():
     values = {name: os.environ.get(name, '') for name in (
         'LIVE_FTPS_HOST', 'LIVE_FTPS_USERNAME', 'LIVE_FTPS_PASSWORD', 'PROD_FTPS_ROOT')}
-    if any(not value for value in values.values()):
-        raise RuntimeError('Required protected FTPS settings are missing')
+    missing = [name for name, value in values.items() if not value]
+    if missing:
+        raise RuntimeError('Missing production FTPS configuration: ' + ', '.join(missing))
     if values['LIVE_FTPS_USERNAME'] != EXPECTED_USER:
         raise RuntimeError('Production FTPS account does not match the approved account')
     if values['PROD_FTPS_ROOT'] != EXPECTED_ROOT:
