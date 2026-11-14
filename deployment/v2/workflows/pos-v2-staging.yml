@@ -1,0 +1,72 @@
+name: POS V2 Staging Deploy
+on:
+  push:
+    branches: [staging]
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency: {group: anise-pos-staging, cancel-in-progress: false}
+jobs:
+  build:
+    if: github.ref == 'refs/heads/staging'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}'}
+      - run: |
+          git fetch --no-tags --depth=1 origin staging
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/staging)"
+      - uses: actions/setup-dotnet@v4
+        with: {dotnet-version: '9.0.x'}
+      - run: dotnet restore AnisePOS.sln
+      - run: dotnet build AnisePOS.sln --configuration Release --no-restore
+      - run: dotnet run --project tests/AnisePOS.Checks --configuration Release --no-build
+      - run: python3 -m unittest discover -s tests/deployment -v
+      - run: python3 scripts/check-migrations.py
+      - run: dotnet publish src/AnisePOS.Api/AnisePOS.Api.csproj --configuration Release --no-restore --no-self-contained -p:UseAppHost=false --output artifacts/staging
+      - run: python3 scripts/build-web-assets.py artifacts/staging/wwwroot
+      - run: python3 scripts/review-staging-package.py
+      - run: python3 -m deployment.v2.prepare artifacts/staging
+      - run: python3 -m deployment.v2.cli package --environment staging --artifact artifacts/staging
+        env:
+          V2_STAGING_FTPS_HOST: '${{ secrets.STAGING_FTPS_HOST }}'
+          V2_STAGING_FTPS_USER: stageposftp
+          V2_STAGING_FTPS_ROOT: /stageposftp/wwwroot
+          V2_STAGING_SITE_URL: https://pos-staging.loveanise.co.uk
+          V2_STAGING_DATABASE: anisedb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: anise-pos-v2-${{ github.sha }}
+          path: artifacts/staging
+          if-no-files-found: error
+          retention-days: 90
+  deploy:
+    name: Deploy and verify staging
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}', persist-credentials: false}
+      - uses: actions/download-artifact@v4
+        with: {name: 'anise-pos-v2-${{ github.sha }}', path: artifacts/staging}
+      - name: Verify live managed files and retain pre-deploy archive
+        run: python3 -m deployment.v2.cli backup --environment staging --archive staging-before.zip
+        env: &staging_env
+          V2_ACTIVATED: '${{ vars.V2_ACTIVATED }}'
+          V2_STAGING_FTPS_HOST: '${{ secrets.STAGING_FTPS_HOST }}'
+          V2_STAGING_FTPS_USER: stageposftp
+          V2_STAGING_FTPS_PASSWORD: '${{ secrets.STAGING_FTPS_PASSWORD }}'
+          V2_STAGING_FTPS_ROOT: /stageposftp/wwwroot
+          V2_STAGING_SITE_URL: https://pos-staging.loveanise.co.uk
+          V2_STAGING_DATABASE: anisedb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pos-v2-staging-before-${{ github.run_id }}
+          path: staging-before.zip
+          if-no-files-found: error
+          retention-days: 90
+      - name: Install exact artifact and verify application health
+        run: python3 -m deployment.v2.cli deploy --environment staging --release '${{ github.sha }}'
+        env: *staging_env

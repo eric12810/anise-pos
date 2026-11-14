@@ -1,0 +1,65 @@
+name: POS V2 Production Release
+on:
+  workflow_dispatch:
+    inputs:
+      staging_run_id: {description: 'Verified V2 staging run ID', required: true, type: string}
+permissions: {contents: read, actions: read}
+concurrency: {group: anise-pos-production, cancel-in-progress: false}
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: false}
+      - uses: actions/setup-dotnet@v4
+        with: {dotnet-version: '9.0.x'}
+      - name: Resolve exact verified staging artifact
+        id: resolve
+        run: python3 deployment/v2/resolve.py
+        env:
+          GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
+          STAGING_RUN_ID: '${{ inputs.staging_run_id }}'
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: '${{ secrets.GITHUB_TOKEN }}'
+          run-id: '${{ inputs.staging_run_id }}'
+          name: '${{ steps.resolve.outputs.artifact_name }}'
+          path: artifacts/staging
+      - name: Load protected Winserve, SQL, runtime and backup evidence
+        run: python3 -c 'import os,pathlib; pathlib.Path("preflight.json").write_text(os.environ["V2_PRODUCTION_PREFLIGHT_EVIDENCE"])'
+        env:
+          V2_PRODUCTION_PREFLIGHT_EVIDENCE: '${{ secrets.V2_PRODUCTION_PREFLIGHT_EVIDENCE }}'
+      - name: Probe production SQL identity and mapped schema with read-only login
+        run: dotnet run --project deployment/v2/DbProbe/DbProbe.csproj --configuration Release -- --output db-probe.json
+        env:
+          V2_SQL_CONNECTION: '${{ secrets.V2_PRODUCTION_READONLY_SQL_CONNECTION }}'
+      - name: Verify exact artifact and protected evidence
+        run: python3 -m deployment.v2.cli preflight --environment production --evidence preflight.json --db-probe db-probe.json
+        env: &production_identity
+          V2_PRODUCTION_FTPS_HOST: '${{ secrets.LIVE_FTPS_HOST }}'
+          V2_PRODUCTION_FTPS_USER: liveposftp
+          V2_PRODUCTION_FTPS_ROOT: /wwwroot
+          V2_PRODUCTION_SITE_URL: https://pos.loveanise.co.uk
+          V2_PRODUCTION_DATABASE: anisedatabase
+      - name: Verify current managed files and retain pre-release archive
+        run: python3 -m deployment.v2.cli backup --environment production --evidence preflight.json --db-probe db-probe.json --archive production-before.zip
+        env: &production_env
+          V2_ACTIVATED: '${{ vars.V2_ACTIVATED }}'
+          V2_PRODUCTION_FTPS_HOST: '${{ secrets.LIVE_FTPS_HOST }}'
+          V2_PRODUCTION_FTPS_USER: liveposftp
+          V2_PRODUCTION_FTPS_PASSWORD: '${{ secrets.LIVE_FTPS_PASSWORD }}'
+          V2_PRODUCTION_FTPS_ROOT: /wwwroot
+          V2_PRODUCTION_SITE_URL: https://pos.loveanise.co.uk
+          V2_PRODUCTION_DATABASE: anisedatabase
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pos-v2-production-before-${{ github.run_id }}
+          path: production-before.zip
+          if-no-files-found: error
+          retention-days: 90
+      - name: Install exact staging artifact and verify health
+        run: python3 -m deployment.v2.cli deploy --environment production --evidence preflight.json --db-probe db-probe.json --release '${{ steps.resolve.outputs.release }}'
+        env: *production_env
