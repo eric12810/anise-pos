@@ -142,7 +142,7 @@ class UploadTests(unittest.TestCase):
 
 class DirectoryTests(unittest.TestCase):
     def test_production_curl_lists_approved_root_without_exposing_password(self):
-        ftp = upload.ProductionFTP('ftps.example.test', 'liveposftp', 'private-password', '/wwwroot')
+        ftp = upload.CurlFTP('ftps.example.test', 'liveposftp', 'private-password', '/wwwroot', 'liveposftp', '/wwwroot')
         ftp.cwd('/wwwroot')
         with patch.object(upload.subprocess, 'run') as run:
             run.return_value.returncode = 0
@@ -156,7 +156,7 @@ class DirectoryTests(unittest.TestCase):
             self.assertIn(b'private-password', kwargs['input'])
 
     def test_production_curl_rejects_paths_outside_approved_root(self):
-        ftp = upload.ProductionFTP('ftps.example.test', 'liveposftp', 'private-password', '/wwwroot')
+        ftp = upload.CurlFTP('ftps.example.test', 'liveposftp', 'private-password', '/wwwroot', 'liveposftp', '/wwwroot')
         with self.assertRaises(ValueError):
             ftp.cwd('/stageposftp/wwwroot')
         ftp.cwd('/wwwroot')
