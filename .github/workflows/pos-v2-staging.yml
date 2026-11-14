@@ -1,5 +1,7 @@
 name: POS V2 Staging Deploy
 on:
+  push:
+    branches: [staging]
   workflow_dispatch:
 permissions: {contents: read}
 concurrency: {group: anise-pos-staging, cancel-in-progress: false}
