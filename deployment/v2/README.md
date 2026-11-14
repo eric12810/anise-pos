@@ -149,8 +149,12 @@ the V2 production rollback has been rehearsed and accepted.
 
 The 90-day GitHub artifacts are an immediate recovery copy, not a durable
 backup. Protected evidence must point to separately retained, restorable
-application and SQL backups. No production deployment, rollback, SQL mutation,
-hosting configuration change or V2 workflow activation is part of this branch.
+application and SQL backups. The current rollback template downloads its archive
+from the producing Actions run; before production activation, add and rehearse a
+protected retrieval path from the durable application backup store so rollback
+still works after Actions artifact expiry. No production deployment, rollback,
+SQL mutation, hosting configuration change or V2 workflow activation is part of
+this branch.
 
 The V2 transport probe is `python3 -m deployment.v2.cli ftps-probe --environment staging`
 with the protected staging FTPS environment and `V2_FTPS_PROBE_APPROVAL=PROBE STAGING FTPS`.
