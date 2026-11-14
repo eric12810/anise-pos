@@ -69,6 +69,97 @@ class StagingFTP(ftplib.FTP_TLS):
         return '226 Upload complete'
 
 
+class ProductionFTP:
+    """Use curl for Winserve production paths, data transfers and file operations."""
+    def __init__(self, host, user, password, root):
+        if user != 'liveposftp' or root != '/wwwroot':
+            raise ValueError('Production FTPS account or root differs from the verified target')
+        self.host, self.user, self.password, self.root = host, user, password, root
+        self.path = '/'
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+    def _path(self, name=''):
+        path = PurePosixPath(name) if name.startswith('/') else PurePosixPath(self.path) / name
+        if '..' in path.parts or any(c in str(path) for c in '\r\n\\'):
+            raise ValueError('Unsafe production FTP path')
+        if str(path) != self.root and not str(path).startswith(self.root + '/'):
+            raise ValueError('Production FTP operation outside approved root')
+        return str(path)
+
+    def _run(self, path, *, listing=False, upload=None, commands=()):
+        credentials = (self.user + ':' + self.password).replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r')
+        url = 'ftp://' + self.host + ':21/' + quote(path.lstrip('/'), safe='/')
+        if listing and not url.endswith('/'):
+            url += '/'
+        args = ['curl', '--silent', '--show-error', '--fail', '--ssl-reqd',
+                '--proto', '=ftp', '--ftp-method', 'multicwd', '--connect-timeout', '30',
+                '--max-time', '180', '--config', '-']
+        for command in commands:
+            args += ['--quote', command]
+        if listing:
+            args.append('--list-only')
+        if upload is not None:
+            args += ['--upload-file', upload]
+        result = subprocess.run(args + [url], input=('user = "' + credentials + '"\n').encode(), capture_output=True)
+        if result.returncode:
+            raise RuntimeError('Production curl FTPS operation failed with exit code ' + str(result.returncode))
+        return result.stdout
+
+    def cwd(self, path):
+        target = self._path(path)
+        if target != self.root and not target.startswith(self.root + '/'):
+            raise ValueError('Production FTP navigation outside approved root')
+        self.path = target
+
+    def pwd(self):
+        return self.path
+
+    def mlsd(self):
+        return [(name, {}) for name in self.nlst()]
+
+    def nlst(self):
+        data = self._run(self.path, listing=True).decode('utf-8')
+        names = [PurePosixPath(line).name for line in data.splitlines() if line]
+        if any(not name.isprintable() or '/' in name or '\\' in name for name in names):
+            raise RuntimeError('Unsafe production FTP directory listing')
+        return names
+
+    def storbinary(self, command, stream):
+        if not command.startswith('STOR '):
+            raise ValueError('Unsupported production FTP write command')
+        with tempfile.NamedTemporaryFile() as payload:
+            while chunk := stream.read(65536):
+                payload.write(chunk)
+            payload.flush()
+            self._run(self._path(command[5:]), upload=payload.name)
+        return '226 Upload complete'
+
+    def retrbinary(self, command, callback):
+        if not command.startswith('RETR '):
+            raise ValueError('Unsupported production FTP read command')
+        data = self._run(self._path(command[5:]))
+        for offset in range(0, len(data), 65536):
+            callback(data[offset:offset + 65536])
+        return '226 Transfer complete'
+
+    def _command(self, *commands):
+        self._run(self.root, listing=True, commands=commands)
+
+    def mkd(self, path):
+        self._command('MKD ' + self._path(path))
+
+    def rename(self, old, new):
+        self._command('RNFR ' + self._path(old), 'RNTO ' + self._path(new))
+
+    def delete(self, path):
+        self._command('DELE ' + self._path(path))
+
+
 def package_files(root, manifest):
     files = []
     for line in manifest.read_text().splitlines():
@@ -248,7 +339,18 @@ def main():
     if not password:
         raise ValueError(('Production' if DEPLOYMENT_ENV == 'production' else 'Staging') + ' password secret is missing')
     files = package_files(Path('artifacts/staging'), Path('artifacts/staging-manifest.sha256'))
-    with StagingFTP(context=ssl.create_default_context(), timeout=60) as ftp:
+    connection = (ProductionFTP(HOST, USER, password, REMOTE_ROOT) if DEPLOYMENT_ENV == 'production'
+                  else StagingFTP(context=ssl.create_default_context(), timeout=60))
+    with connection as ftp:
+        if DEPLOYMENT_ENV == 'production':
+            ftp.cwd(REMOTE_ROOT)
+            directory_names(ftp)
+            print('Verified production FTPS destination with curl and certificate-checked TLS.', flush=True)
+            if args.deploy:
+                upload(ftp, files)
+            else:
+                print('Connection check only: no files created, changed or deleted.')
+            return
         print('Step: connect to configured FTPS', flush=True)
         ftp.connect(HOST, 21)
         print('Step: negotiate and verify TLS', flush=True)

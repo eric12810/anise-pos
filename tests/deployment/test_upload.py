@@ -141,6 +141,28 @@ class UploadTests(unittest.TestCase):
 
 
 class DirectoryTests(unittest.TestCase):
+    def test_production_curl_lists_approved_root_without_exposing_password(self):
+        ftp = upload.ProductionFTP('ftps.example.test', 'liveposftp', 'private-password', '/wwwroot')
+        ftp.cwd('/wwwroot')
+        with patch.object(upload.subprocess, 'run') as run:
+            run.return_value.returncode = 0
+            run.return_value.stdout = b'web.config\nAnisePOS.Api.dll\n'
+            self.assertEqual(ftp.nlst(), ['web.config', 'AnisePOS.Api.dll'])
+            args, kwargs = run.call_args
+            self.assertIn('--ssl-reqd', args[0])
+            self.assertIn('--list-only', args[0])
+            self.assertEqual(args[0][-1], 'ftp://ftps.example.test:21/wwwroot/')
+            self.assertNotIn('private-password', ' '.join(args[0]))
+            self.assertIn(b'private-password', kwargs['input'])
+
+    def test_production_curl_rejects_paths_outside_approved_root(self):
+        ftp = upload.ProductionFTP('ftps.example.test', 'liveposftp', 'private-password', '/wwwroot')
+        with self.assertRaises(ValueError):
+            ftp.cwd('/stageposftp/wwwroot')
+        ftp.cwd('/wwwroot')
+        with self.assertRaises(ValueError):
+            ftp.delete('../other-site/web.config')
+
     def test_unsupported_mlsd_falls_back(self):
         from unittest.mock import Mock
         ftp = Mock()
