@@ -6,8 +6,15 @@ using Microsoft.EntityFrameworkCore.Metadata;
 
 // This console process never starts the API or invokes its write-capable startup path.
 // The credential must belong to a separately verified read-only SQL login.
+if (args.Length == 1 && args[0] == "--check-model")
+{
+    var offlineOptions = new DbContextOptionsBuilder<AniseDbContext>().UseSqlServer("Server=localhost;Database=offline-model-check").Options;
+    await using var offlineContext = new AniseDbContext(offlineOptions);
+    Console.WriteLine("Mapped SQL columns: " + ProductionSchemaRequirements.MappedColumns(offlineContext.Model).Length);
+    return;
+}
 if (args.Length != 2 || args[0] != "--output")
-    throw new InvalidOperationException("Usage: DbProbe --output result.json");
+    throw new InvalidOperationException("Usage: DbProbe --output result.json | --check-model");
 
 try
 {
@@ -43,15 +50,7 @@ try
 
     var options = new DbContextOptionsBuilder<AniseDbContext>().UseSqlServer(builder.ConnectionString).Options;
     await using var context = new AniseDbContext(options);
-    var required = context.Model.GetEntityTypes()
-        .Where(entity => entity.GetTableName() is not null)
-        .SelectMany(entity =>
-        {
-            var table = entity.GetTableName()!;
-            var schema = entity.GetSchema() ?? "dbo";
-            var store = StoreObjectIdentifier.Table(table, schema);
-            return entity.GetProperties().Select(property => $"{schema}.{table}.{property.GetColumnName(store)}");
-        }).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    var required = ProductionSchemaRequirements.MappedColumns(context.Model);
     var missing = required.Where(column => !columns.Contains(column)).OrderBy(x => x).ToArray();
 
     // Confirm this login cannot mutate mapped application tables. The caller
