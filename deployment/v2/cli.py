@@ -117,5 +117,9 @@ if __name__ == "__main__":
         main()
     except Exception as error:
         # No server replies, passwords or raw evidence are printed.
-        print("V2 stopped safely:", type(error).__name__, file=sys.stderr)
+        if len(sys.argv) > 1 and sys.argv[1] == "preflight" and isinstance(error, ValueError):
+            # Preflight validators return fixed, non-secret failure descriptions.
+            print("V2 preflight stopped:", str(error), file=sys.stderr)
+        else:
+            print("V2 stopped safely:", type(error).__name__, file=sys.stderr)
         raise SystemExit(1)
