@@ -352,7 +352,7 @@ class V2Tests(unittest.TestCase):
                         sql_database=PROD.database, sql_server="mssqluk20.prosql.net",
                         artifact_sha256=digest, effective_iis_config_checked=True,
                         schema_compatible=True,
-                        runtime_compatible=True, startup_logging_verified=True,
+                        runtime_compatible=True, startup_logging="verified", startup_logging_verified=True,
                         pending_sql_migrations=[], backups={
                             "application": {"reference": "private/app/backup-123", "restorable": True, "retained": True},
                             "database": {"reference": "private/sql/backup-123", "restorable": True, "retained": True}},
@@ -376,6 +376,15 @@ class V2Tests(unittest.TestCase):
         evidence["sql_mode"] = "manual"
         evidence["manual_sql_review"] = {"observed_server": "mssqluk20.prosql.net"}
         with mock.patch.object(preflight.manual_sql, "validate", return_value=True):
+            hosted = evidence | {"startup_logging": "host_unavailable", "startup_logging_verified": False,
+                                 "startup_logging_limitation_acknowledged": True}
+            self.assertTrue(preflight.validate_evidence(json.dumps(hosted), PROD, digest, now=now,
+                                                        release=NEW, sql_snapshot=b"{}", expected_schema=b"{}"))
+            for field in ("startup_logging", "startup_logging_limitation_acknowledged"):
+                changed = hosted | {field: "unknown" if field == "startup_logging" else False}
+                with self.assertRaises(ValueError):
+                    preflight.validate_evidence(json.dumps(changed), PROD, digest, now=now,
+                                                release=NEW, sql_snapshot=b"{}", expected_schema=b"{}")
             for field in ("effective_iis_config_checked", "schema_compatible", "runtime_compatible",
                           "startup_logging_verified"):
                 changed = evidence | {field: False}

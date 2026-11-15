@@ -127,6 +127,7 @@ and expires after 24 hours. Required fields are:
   },
   "schema_compatible": true,
   "runtime_compatible": true,
+  "startup_logging": "verified",
   "startup_logging_verified": true,
   "pending_sql_migrations": [],
   "backups": {
@@ -135,6 +136,12 @@ and expires after 24 hours. Required fields are:
   }
 }
 ```
+
+If Winserve cannot provide writable stdout logs or ANCM startup logs, record
+`"startup_logging": "host_unavailable"`, `"startup_logging_verified": false`,
+and `"startup_logging_limitation_acknowledged": true`. This is an explicit
+diagnostic limitation, not a claim that logging works. Post-deploy health and
+failed-release recovery requirements remain in force.
 
 The manual path takes the complete JSON result from `manual-sql-review.sql` and
 an offline EF schema generated from the **exact release source**. It checks
