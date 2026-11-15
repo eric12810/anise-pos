@@ -1,6 +1,8 @@
 """V2 command line entry point; no deployment workflow invokes it until activation."""
 import argparse
+import json
 import os
+import stat
 from pathlib import Path
 import sys
 
@@ -17,6 +19,19 @@ def target_from_env(name):
                   os.environ.get(prefix + "DATABASE", ""))
 
 
+def read_private(path):
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    with os.fdopen(descriptor, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) & 0o077:
+            raise ValueError("Protected evidence file must be private (mode 0600)")
+        raw = stream.read(1_000_001)
+        if len(raw) > 1_000_000:
+            raise ValueError("Protected evidence file is oversized")
+        return raw
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("command", choices=("package", "preflight", "backup", "deploy", "rollback", "seed", "ftps-probe"))
@@ -25,6 +40,10 @@ def main(argv=None):
     parser.add_argument("--release", default="")
     parser.add_argument("--archive", default="")
     parser.add_argument("--evidence", default="")
+    parser.add_argument("--sql-snapshot", default="")
+    parser.add_argument("--expected-schema", default="")
+    parser.add_argument("--db-probe", default="")
+    parser.add_argument("--sql-mode", choices=("manual", "automated"), default="")
     args = parser.parse_args(argv)
     target = target_from_env(args.environment)
     target.validate()
@@ -49,7 +68,17 @@ def main(argv=None):
     if args.environment == "production":
         if not args.evidence:
             raise ValueError("Protected production preflight evidence is required")
-        validate_evidence(Path(args.evidence).read_text(), target, digest)
+        evidence_raw = read_private(args.evidence).decode("utf-8")
+        mode = json.loads(evidence_raw).get("sql_mode")
+        if args.sql_mode != mode:
+            raise ValueError("Explicit SQL mode must match protected evidence")
+        snapshot_path = args.sql_snapshot or "sql-snapshot.json"
+        schema_path = args.expected_schema or "expected-schema.json"
+        probe_path = args.db_probe or "db-probe.json"
+        validate_evidence(evidence_raw, target, digest, release=args.release,
+                          sql_snapshot=read_private(snapshot_path) if mode == "manual" else None,
+                          expected_schema=read_private(schema_path) if mode == "manual" else None,
+                          db_probe=read_private(probe_path).decode("utf-8") if mode == "automated" else None)
     if args.command == "preflight":
         print("Protected preflight evidence validated for exact artifact")
         return

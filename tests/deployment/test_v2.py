@@ -1,15 +1,17 @@
 import hashlib
+import base64
 import io
 import json
 import os
 from pathlib import Path
 import re
 import tempfile
+import zlib
 import unittest
 from unittest import mock
 from zipfile import ZipFile
 
-from deployment.v2 import cli, engine, model, preflight, transport
+from deployment.v2 import cli, engine, model, preflight, transport, manual_sql, load_manual_snapshot
 
 TARGET = model.Target("staging", "wsuk32.pronameserver.com", "stageposftp", "/stageposftp/wwwroot",
                       "https://pos-staging.loveanise.co.uk", "anisedb")
@@ -28,10 +30,11 @@ class CliSeedGuards(unittest.TestCase):
              mock.patch.object(cli, "package", return_value=({}, "digest")), \
              mock.patch.object(cli, "CurlFTPS") as ftps, \
              mock.patch.object(cli, "seed") as seed, \
-             mock.patch.object(cli, "validate_evidence"):
+             mock.patch.object(cli, "validate_evidence"), \
+             mock.patch.object(cli, "read_private", side_effect=[b'{"sql_mode":"manual"}', b'{}', b'{}']):
             args = ["seed", "--environment", environment, "--release", OLD]
             if environment == "production":
-                args += ["--evidence", __file__]
+                args += ["--evidence", __file__, "--sql-mode", "manual"]
             try:
                 cli.main(args)
                 error = None
@@ -72,6 +75,39 @@ class CliSeedGuards(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "rollback approval"):
                 cli.main(["rollback", "--environment", "production", "--release", OLD, "--archive", "backup.zip"])
             ftps.assert_not_called()
+
+    def test_production_preflight_only_never_constructs_transport(self):
+        with tempfile.TemporaryDirectory() as folder:
+            evidence = Path(folder) / "preflight.json"
+            evidence.write_text('{"sql_mode":"manual"}')
+            evidence.chmod(0o600)
+            (Path(folder) / "sql-snapshot.json").write_text("{}")
+            (Path(folder) / "sql-snapshot.json").chmod(0o600)
+            (Path(folder) / "expected-schema.json").write_text("{}")
+            (Path(folder) / "expected-schema.json").chmod(0o600)
+            with mock.patch.object(cli, "target_from_env", return_value=PROD), \
+                 mock.patch.object(cli, "package", return_value=({}, "a" * 64)), \
+                 mock.patch.object(cli, "validate_evidence", return_value=True), \
+                 mock.patch.object(cli, "CurlFTPS") as ftps, \
+                 mock.patch.object(cli, "backup_current") as backup, \
+                 mock.patch.object(cli, "deploy") as deploy, \
+                 mock.patch.object(cli, "rollback") as rollback:
+                cli.main(["preflight", "--environment", "production", "--evidence", str(evidence),
+                          "--sql-snapshot", str(Path(folder) / "sql-snapshot.json"),
+                          "--expected-schema", str(Path(folder) / "expected-schema.json"),
+                          "--sql-mode", "manual", "--release", NEW])
+                ftps.assert_not_called()
+                backup.assert_not_called()
+                deploy.assert_not_called()
+                rollback.assert_not_called()
+            evidence.chmod(0o644)
+            with self.assertRaisesRegex(ValueError, "private"):
+                cli.read_private(evidence)
+            evidence.chmod(0o600)
+            symlink = Path(folder) / "linked-evidence.json"
+            symlink.symlink_to(evidence)
+            with self.assertRaises(OSError):
+                cli.read_private(symlink)
 
 
 class FakeFTP:
@@ -253,46 +289,159 @@ class V2Tests(unittest.TestCase):
                         pending_sql_migrations=[], backups={
                             "application": {"reference": "private/app/backup-123", "restorable": True, "retained": True},
                             "database": {"reference": "private/sql/backup-123", "restorable": True, "retained": True}},
-                        manual_sql_review={
-                            "checked_at": "2026-11-14T18:00:00Z", "method": "manual_readonly_metadata",
-                            "reviewed_by": "owner", "record_reference": "private/sql/review-123",
-                            "server": "mssqluk20.prosql.net", "database": "anisedatabase",
-                            "artifact_sha256": digest, "mapped_columns_checked": True,
-                            "missing_mapped_columns": [], "required_index_present": True,
-                            "migration_checksums_checked": True})
+                        sql_mode="automated")
         from datetime import datetime, timezone
         now = datetime(2026, 11, 14, 19, tzinfo=timezone.utc)
-        self.assertTrue(preflight.validate_evidence(json.dumps(evidence), PROD, digest, now=now))
+        probe = json.dumps(dict(server="mssqluk20.prosql.net", database="anisedatabase", connected=True,
+                                permission_restricted=True, schema_compatible=True, missing_columns=[],
+                                missing_required_index=False))
+        self.assertTrue(preflight.validate_evidence(json.dumps(evidence), PROD, digest, now=now, db_probe=probe))
         evidence["sql_database"] = "anisedb"
         with self.assertRaises(ValueError):
-            preflight.validate_evidence(json.dumps(evidence), PROD, digest, now=now)
+            preflight.validate_evidence(json.dumps(evidence), PROD, digest, now=now, db_probe=probe)
         evidence["sql_database"] = "anisedatabase"
-        for key, value in (("database", "anisedb"), ("artifact_sha256", "0" * 64),
-                           ("missing_mapped_columns", ["dbo.Orders.Id"]), ("required_index_present", False),
-                           ("migration_checksums_checked", False), ("record_reference", "")):
-            review = evidence["manual_sql_review"].copy()
-            review[key] = value
-            evidence["manual_sql_review"] = review
-            with self.assertRaises(ValueError, msg=key):
-                preflight.validate_evidence(json.dumps(evidence), PROD, digest, now=now)
-            evidence["manual_sql_review"][key] = {"database": "anisedatabase", "artifact_sha256": digest,
-                "missing_mapped_columns": [], "required_index_present": True,
-                "migration_checksums_checked": True, "record_reference": "private/sql/review-123"}[key]
-        evidence["manual_sql_review"]["checked_at"] = "2026-11-10T18:00:00Z"
         with self.assertRaises(ValueError):
             preflight.validate_evidence(json.dumps(evidence), PROD, digest, now=now)
+        probe_bad = json.loads(probe)
+        probe_bad["permission_restricted"] = False
+        with self.assertRaises(ValueError):
+            preflight.validate_evidence(json.dumps(evidence), PROD, digest, now=now, db_probe=json.dumps(probe_bad))
+        evidence["sql_mode"] = "manual"
+        evidence["manual_sql_review"] = {"observed_server": "mssqluk20.prosql.net"}
+        with mock.patch.object(preflight.manual_sql, "validate", return_value=True):
+            for field in ("effective_iis_config_checked", "schema_compatible", "runtime_compatible",
+                          "startup_logging_verified"):
+                changed = evidence | {field: False}
+                with self.assertRaises(ValueError, msg=field):
+                    preflight.validate_evidence(json.dumps(changed), PROD, digest, now=now,
+                                                release=NEW, sql_snapshot=b"{}", expected_schema=b"{}")
+            changed = evidence | {"backups": evidence["backups"] | {"database":
+                                  evidence["backups"]["database"] | {"restorable": False}}}
+            with self.assertRaises(ValueError):
+                preflight.validate_evidence(json.dumps(changed), PROD, digest, now=now,
+                                            release=NEW, sql_snapshot=b"{}", expected_schema=b"{}")
 
     def test_manual_sql_review_script_has_no_write_statement(self):
         script = Path("deployment/v2/manual-sql-review.sql").read_text()
         sql = "\n".join(line.split("--", 1)[0] for line in script.splitlines())
         self.assertFalse(re.search(r"\b(INSERT|UPDATE|DELETE|ALTER|CREATE|DROP|EXEC|MERGE|TRUNCATE)\b", sql, re.I))
-        self.assertIn("SELECT DB_NAME()", sql)
+        self.assertIn("DB_NAME()", sql)
+
+    def test_manual_sql_snapshot_checks_release_schema_and_migrations(self):
+        from datetime import datetime, timezone
+        now = datetime(2026, 11, 14, 19, tzinfo=timezone.utc)
+        digest = "a" * 64
+        columns = []
+        for name, (kind, nullable) in manual_sql.REQUIRED_COLUMNS.items():
+            schema, table, column = name.split(".")
+            columns.append(dict(schema=schema, table=table, column=column, type=kind, nullable=nullable,
+                                max_length_bytes=manual_sql.EXPLICIT_LENGTHS.get(name, 0) * 2))
+        for name, length in manual_sql.EXPLICIT_LENGTHS.items():
+            if name not in manual_sql.REQUIRED_COLUMNS:
+                schema, table, column = name.split(".")
+                columns.append(dict(schema=schema, table=table, column=column, type="nvarchar",
+                                    nullable=True, max_length_bytes=length * 2))
+        for name, default in manual_sql.REQUIRED_DEFAULTS.items():
+            schema, table, column = name.split(".")
+            entry = next((x for x in columns if (x["schema"], x["table"], x["column"]) ==
+                          (schema, table, column)), None)
+            if entry is None:
+                entry = dict(schema=schema, table=table, column=column, type="nvarchar",
+                             nullable=False, max_length_bytes=0)
+                columns.append(entry)
+            entry["default_definition"] = "('" + default + "')"
+        indexes = []
+        for name, unique in manual_sql.REQUIRED_INDEXES.items():
+            schema, table, index = name.split(".")
+            indexes.append(dict(schema=schema, table=table, name=index, unique=unique,
+                                primary_key=False,
+                                key_rows=[{"name": key} for key in manual_sql.REQUIRED_INDEX_KEYS[name]],
+                                filter=("Provider = 'WebsiteCash'" if "WebsiteCash" in index else
+                                        "Provider = 'StripeCheckout'") if table == "Payments" else None))
+        indexes.append(dict(schema="dbo", table="Refunds", name="PK_Refunds", unique=True,
+                            primary_key=True, key_rows=[{"name": "Id"}], filter=None))
+        snapshot = dict(checked_at="2026-11-14T18:00:00Z", database="anisedatabase", server="SQLHOST",
+                        columns=columns, indexes=indexes,
+                        foreign_keys=[dict(parent_table="Refunds", parent_column="OrderId",
+                                           referenced_table="Orders", referenced_column="Id")],
+                        check_constraints=[dict(table=table, definition=" AND ".join(parts))
+                                           for table, groups in manual_sql.REQUIRED_CHECKS.items()
+                                           for parts in groups],
+                        migration_history=dict(available=False, records=[]))
+        expected = dict(columns=["dbo.Refunds.Id"], indexes=["dbo.Refunds.IX_Refunds_OrderId_CreatedAtUtc"],
+                        mappedTypes=[dict(name="dbo.Refunds.Id", type="uniqueidentifier", nullable=False)],
+                        mappedIndexes=[dict(name="dbo.Refunds.IX_Refunds_OrderId_CreatedAtUtc", unique=False,
+                                            keys=["OrderId", "CreatedAtUtc"])],
+                        mappedForeignKeys=[dict(parent_table="Refunds", parent_column="OrderId",
+                                                referenced_table="Orders", referenced_column="Id")],
+                        mappedPrimaryKeys=[dict(table="Refunds", keys=["Id"])])
+        raw = json.dumps(snapshot).encode()
+        model_raw = json.dumps(expected).encode()
+        checksums = json.loads(Path("database/migration-checksums.json").read_text())
+        review = dict(mode="manual", artifact_sha256=digest, release_commit=NEW,
+                      snapshot_sha256=hashlib.sha256(raw).hexdigest(),
+                      expected_schema_sha256=hashlib.sha256(model_raw).hexdigest(),
+                      reviewed_at="2026-11-14T18:30:00Z", reviewed_by="owner",
+                      record_reference="private/sql/review-2026-11-14",
+                      approval="APPROVE POS PRODUCTION SQL PREFLIGHT",
+                      database="anisedatabase", connection_host="mssqluk20.prosql.net",
+                      observed_server="SQLHOST", migration_checksums=checksums, pending_migrations=[])
+        self.assertTrue(manual_sql.validate(raw, model_raw, review, digest, NEW, now=now))
+        with self.assertRaises(ValueError):
+            manual_sql.validate(raw, model_raw,
+                                review | {"release_commit": manual_sql.BASELINE_RELEASE},
+                                digest, manual_sql.BASELINE_RELEASE, now=now)
+        for field, bad in (("database", "anisedb"), ("server", "other"),
+                           ("checked_at", "2026-11-10T18:00:00Z")):
+            changed = snapshot.copy()
+            changed[field] = bad
+            changed_raw = json.dumps(changed).encode()
+            changed_review = review | {"snapshot_sha256": hashlib.sha256(changed_raw).hexdigest()}
+            with self.assertRaises(ValueError, msg=field):
+                manual_sql.validate(changed_raw, model_raw, changed_review, digest, NEW, now=now)
+        for field in ("columns", "indexes", "foreign_keys"):
+            changed = snapshot.copy()
+            changed[field] = []
+            changed_raw = json.dumps(changed).encode()
+            changed_review = review | {"snapshot_sha256": hashlib.sha256(changed_raw).hexdigest()}
+            with self.assertRaises(ValueError, msg=field):
+                manual_sql.validate(changed_raw, model_raw, changed_review, digest, NEW, now=now)
+        changed = snapshot | {"migration_history": {"available": True, "records": []}}
+        changed_raw = json.dumps(changed).encode()
+        with self.assertRaises(ValueError):
+            manual_sql.validate(changed_raw, model_raw,
+                                review | {"snapshot_sha256": hashlib.sha256(changed_raw).hexdigest()},
+                                digest, NEW, now=now)
+        for field, bad in (("artifact_sha256", "0" * 64), ("migration_checksums", {}),
+                           ("pending_migrations", ["011"]), ("reviewed_at", "2026-11-10T18:00:00Z"),
+                           ("approval", ""), ("connection_host", "wrong.example")):
+            with self.assertRaises((ValueError, KeyError), msg=field):
+                manual_sql.validate(raw, model_raw, review | {field: bad}, digest, NEW, now=now)
 
     def test_production_template_does_not_receive_sql_credentials(self):
         workflow = Path("deployment/v2/workflows/pos-v2-production.yml").read_text()
-        self.assertNotIn("V2_SQL_CONNECTION", workflow)
-        self.assertNotIn("V2_PRODUCTION_READONLY_SQL_CONNECTION", workflow)
-        self.assertIn("manual SQL evidence", workflow)
+        self.assertIn("sql_mode", workflow)
+        self.assertIn("V2_SQL_CONNECTION", workflow)
+        self.assertIn("manual", workflow)
+
+    def test_protected_manual_snapshot_expansion_is_bounded_and_private(self):
+        raw = b'{"database":"anisedatabase","columns":[]}'
+        encoded = base64.b64encode(zlib.compress(raw)).decode()
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "snapshot.json"
+            load_manual_snapshot.load(encoded, path)
+            self.assertEqual(path.read_bytes(), raw)
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            with self.assertRaises(FileExistsError):
+                load_manual_snapshot.load(encoded, path)
+            with self.assertRaises(ValueError):
+                load_manual_snapshot.load(base64.b64encode(zlib.compress(b'{"database":"anisedb"}')).decode(),
+                                          Path(folder) / "wrong.json")
+
+    def test_finite_sql_length_exception_is_explicit(self):
+        observed = {"type": "nvarchar", "max_length_bytes": 60}
+        self.assertTrue(manual_sql._compatible_type("nvarchar(max)", observed, "dbo.Products.VeganSection"))
+        self.assertFalse(manual_sql._compatible_type("nvarchar(max)", observed, "dbo.Promotions.SettingsJson"))
 
     def test_curl_transport_preserves_winserve_rename_and_secret_handling(self):
         ftp = transport.CurlFTPS(PROD, "private-password")

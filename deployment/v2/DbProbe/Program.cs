@@ -13,8 +13,49 @@ if (args.Length == 1 && args[0] == "--check-model")
     Console.WriteLine("Mapped SQL columns: " + MappedColumns(offlineContext).Length);
     return;
 }
+if (args.Length == 2 && args[0] == "--schema-json")
+{
+    var offlineOptions = new DbContextOptionsBuilder<AniseDbContext>().UseSqlServer("Server=localhost;Database=offline-model-check").Options;
+    await using var offlineContext = new AniseDbContext(offlineOptions);
+    var tables = offlineContext.Model.GetEntityTypes().Where(e => e.GetTableName() is not null).ToArray();
+    var columns = tables.SelectMany(e => {
+        var store = StoreObjectIdentifier.Table(e.GetTableName()!, e.GetSchema());
+        return e.GetProperties().Select(p => $"{e.GetSchema() ?? "dbo"}.{e.GetTableName()}.{p.GetColumnName(store)}");
+    }).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToArray();
+    if (columns.Length == 0 || columns.Any(x => x.EndsWith('.')))
+        throw new InvalidOperationException("EF model columns unavailable");
+    var indexes = tables.SelectMany(e => e.GetIndexes().Select(i => $"{e.GetSchema() ?? "dbo"}.{e.GetTableName()}.{i.GetDatabaseName()}"))
+        .Where(x => !x.EndsWith('.')).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToArray();
+    var mappedTypes = tables.SelectMany(e => {
+        var store = StoreObjectIdentifier.Table(e.GetTableName()!, e.GetSchema());
+        return e.GetProperties().Select(p => new {
+            name = $"{e.GetSchema() ?? "dbo"}.{e.GetTableName()}.{p.GetColumnName(store)}",
+            type = p.GetColumnType()?.ToLowerInvariant(),
+            nullable = p.IsNullable
+        });
+    }).ToArray();
+    var mappedIndexes = tables.SelectMany(e => e.GetIndexes().Select(i => new {
+        name = $"{e.GetSchema() ?? "dbo"}.{e.GetTableName()}.{i.GetDatabaseName()}",
+        unique = i.IsUnique,
+        keys = i.Properties.Select(p => p.GetColumnName(StoreObjectIdentifier.Table(e.GetTableName()!, e.GetSchema()))).ToArray()
+    })).ToArray();
+    var mappedForeignKeys = tables.SelectMany(e => e.GetForeignKeys().Where(f => f.PrincipalEntityType.GetTableName() is not null)
+        .SelectMany(f => f.Properties.Zip(f.PrincipalKey.Properties, (p, pp) => new {
+            parent_table = e.GetTableName(),
+            parent_column = p.GetColumnName(StoreObjectIdentifier.Table(e.GetTableName()!, e.GetSchema())),
+            referenced_table = f.PrincipalEntityType.GetTableName(),
+            referenced_column = pp.GetColumnName(StoreObjectIdentifier.Table(f.PrincipalEntityType.GetTableName()!, f.PrincipalEntityType.GetSchema()))
+        }))).ToArray();
+    var mappedPrimaryKeys = tables.Select(e => new {
+        table = e.GetTableName(),
+        keys = e.FindPrimaryKey()?.Properties.Select(p => p.GetColumnName(StoreObjectIdentifier.Table(e.GetTableName()!, e.GetSchema()))).ToArray()
+    }).ToArray();
+    await File.WriteAllTextAsync(args[1], JsonSerializer.Serialize(new { columns, indexes, mappedTypes, mappedIndexes, mappedForeignKeys, mappedPrimaryKeys }));
+    Console.WriteLine("Offline EF schema requirements written");
+    return;
+}
 if (args.Length != 2 || args[0] != "--output")
-    throw new InvalidOperationException("Usage: DbProbe --output result.json | --check-model");
+    throw new InvalidOperationException("Usage: DbProbe --output result.json | --check-model | --schema-json expected.json");
 
 try
 {
@@ -51,6 +92,13 @@ try
     await using var context = new AniseDbContext(options);
     var required = MappedColumns(context);
     var missing = required.Where(column => !columns.Contains(column)).OrderBy(x => x).ToArray();
+    var migrationColumns = new[] {
+        "dbo.Orders.CancelledAtUtc", "dbo.Orders.CancellationReason", "dbo.Orders.ReopenedAtUtc",
+        "dbo.Refunds.Id", "dbo.Refunds.OrderId", "dbo.WebsiteCheckouts.ReconciliationError",
+        "dbo.WebsiteCheckouts.ReconciliationCheckedAtUtc"
+    };
+    missing = missing.Concat(migrationColumns.Where(column => !columns.Contains(column)))
+        .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToArray();
 
     // Confirm this login cannot mutate mapped application tables. The caller
     // must also verify login grants and active IIS configuration independently.
@@ -72,17 +120,22 @@ try
 
     var indexPresent = false;
     await using (var command = new SqlCommand("""
-        SELECT COUNT(*) FROM sys.indexes
-        WHERE object_id = OBJECT_ID(N'dbo.Payments', N'U')
-          AND name = N'UX_Payments_StripeCheckout_Reference'
+        SELECT COUNT(*) FROM sys.indexes i
+        WHERE i.object_id = OBJECT_ID(N'dbo.Payments', N'U')
+          AND i.name = N'UX_Payments_StripeCheckout_Reference'
+          AND i.is_unique = 1 AND i.filter_definition LIKE N'%StripeCheckout%'
         """, connection))
         indexPresent = Convert.ToInt32(await command.ExecuteScalarAsync()) == 1;
+    await using (var history = new SqlCommand("SELECT OBJECT_ID(N'dbo.AniseSchemaMigrations', N'U')", connection))
+        if (await history.ExecuteScalarAsync() != DBNull.Value)
+            throw new InvalidOperationException("Migration history requires reviewed checksum comparison");
 
     var result = new
     {
         database,
         server,
         connected = true,
+        permission_restricted = true,
         schema_compatible = missing.Length == 0 && indexPresent,
         missing_columns = missing,
         missing_required_index = !indexPresent

@@ -93,18 +93,25 @@ and expires after 24 hours. Required fields are:
   "sql_database": "anisedatabase",
   "artifact_sha256": "64_HEX_CHARACTERS_FROM_PACKAGE_MANIFEST",
   "effective_iis_config_checked": true,
+  "sql_mode": "manual",
   "manual_sql_review": {
-    "checked_at": "2026-11-14T18:00:00Z",
-    "method": "manual_readonly_metadata",
+    "mode": "manual",
+    "reviewed_at": "FRESH_UTC_TIME_AFTER_QUERY",
     "reviewed_by": "OWNER_ID",
-    "record_reference": "private/sql/review-2026-11-14",
-    "server": "SERVER_RETURNED_BY_MANUAL_READ_ONLY_QUERY",
+    "record_reference": "private/sql/review-YYYY-MM-DD",
+    "approval": "APPROVE POS PRODUCTION SQL PREFLIGHT",
+    "connection_host": "mssqluk20.prosql.net",
+    "observed_server": "VALUE_OF_@@SERVERNAME",
     "database": "anisedatabase",
-    "artifact_sha256": "SAME_64_HEX_PACKAGE_MANIFEST_SHA256",
-    "mapped_columns_checked": true,
-    "missing_mapped_columns": [],
-    "required_index_present": true,
-    "migration_checksums_checked": true
+    "release_commit": "bbfd19864093158a8d2123cc34bae6c97eb92049",
+    "artifact_sha256": "0041791ecf107370e054202ba3d4e9961b003c8908e985f21b06ff2784882c7b",
+    "snapshot_sha256": "SHA256_OF_PRIVATE_SQL_JSON_FILE",
+    "expected_schema_sha256": "SHA256_OF_OFFLINE_RELEASE_MODEL_JSON",
+    "migration_checksums": {
+      "010_order_lifecycle.sql": "6b8bda54f01669104f3bad0f8dcadedfa0e4f9f280c7d520963c0b278b005d7f",
+      "011_website_stripe_reconciliation.sql": "28cb172e7587a2a0d0fa04af4296db235d0ab543a9339a9b08c37c9e6ca43e93"
+    },
+    "pending_migrations": []
   },
   "schema_compatible": true,
   "runtime_compatible": true,
@@ -117,21 +124,66 @@ and expires after 24 hours. Required fields are:
 }
 ```
 
-These booleans are attestations, not automatic Winserve or backup-provider
-checks. Before activation, an authorised operator must verify the **effective**
-IIS `web.config`, inherited/site variables and `ConnectionStrings__AniseDatabase`,
-`DB_NAME()`/`@@SERVERNAME` from an authorised manual metadata-only SQL session, .NET runtime, actual stdout
-logging location/permissions/retention, and restorable private backups. Do not
-place a connection string, password or log contents in this JSON. The workflow
-requires a fresh owner-reviewed SQL record bound to the same artifact checksum.
-Use only `SELECT` and metadata inspection in the existing VS Code connection;
-record the server/database identity, mapped-column comparison, required payment
-index, types, constraints, other indexes, migration history where available,
-checked-in migration checksums and an explicit empty pending-migration list. The existing login may
-have write privileges, so the manual query restriction is procedural rather
-than enforced by SQL permissions. Never put that unrestricted credential in
-GitHub Actions or mark a check passed without its private review record. The
-workflow does not connect to SQL or execute the API's write-capable startup SQL.
+The manual path takes the complete JSON result from `manual-sql-review.sql` and
+an offline EF schema generated from the **exact release source**. It checks
+all mapped tables, columns, SQL types, nullability, primary keys, indexes and
+foreign keys, plus the explicit 010/011 structures and checked-in checksums.
+If the migration-history table exists, its version/checksum rows must be added
+to the private snapshot and match the reviewed checksums; an absent history
+table is recorded as absent, not treated as proof of applied migrations. The
+010/011 structures are always checked. Snapshot and review must both be less
+than 24 hours old; the SHA-256 values cover the exact private files. This is
+reviewed operator evidence, not an authenticated observation by GitHub and not
+proof that the existing SQL account is permission restricted.
+
+In VS Code, select the existing production MSSQL connection, open
+`deployment/v2/manual-sql-review.sql`, and run the **whole file**. Check that
+the returned JSON says `database: anisedatabase`, save the entire JSON cell as
+a private UTF-8 `sql-snapshot.json` outside the repository with mode `0600`.
+Never add it to Git. If
+`migration_history.available` is true, inspect only that table's version and
+checksum columns with a separate read-only `SELECT`, add those records to the
+private JSON, and recheck its hash. Do not include application rows. The query
+does not start the API, execute migrations, or change the database. The
+connection host is recorded by the reviewer because `@@SERVERNAME` can be an
+instance name rather than the DNS host.
+
+Generate `expected-schema.json` from the verified release commit
+`bbfd19864093158a8d2123cc34bae6c97eb92049` with the offline
+`DbProbe --schema-json` command. The dormant production template checks out
+that exact commit and runs the current offline helper against its API source.
+For a local preflight, use an isolated checkout of the same commit; place the
+current `DbProbe/Program.cs` in its `DbProbe` directory before running it.
+Record SHA-256 of both JSON files in the private review. Populate the remaining
+Winserve, runtime, logging and backup attestations only after independent
+verification. The preflight-only command is:
+
+```sh
+python3 -m deployment.v2.cli preflight --environment production \
+  --artifact artifacts/staging --release bbfd19864093158a8d2123cc34bae6c97eb92049 \
+  --sql-mode manual --evidence /private/tmp/anise-v2-preflight/preflight.json \
+  --sql-snapshot /private/tmp/anise-v2-preflight/sql-snapshot.json \
+  --expected-schema /private/tmp/anise-v2-preflight/expected-schema.json
+```
+
+This command reads local files and exits before constructing FTPS transport.
+Its automated counterpart selects `--sql-mode automated` and supplies
+`--db-probe` from the existing `DbProbe --output` operation. The automated
+workflow branch requires a separately verified read-only SQL credential and
+checks the probe's application-table write permission result. Manual mode has
+no SQL credential in GitHub Actions. The full production workflow template
+remains dormant; an eventual deployment still requires production environment
+approval, `V2_ACTIVATED=yes`, verified backups, and healthy application checks.
+The raw SQL snapshot may exceed GitHub's single-secret size limit. The dormant
+workflow accepts only a zlib-compressed, base64-encoded copy in the protected
+production environment secret `V2_PRODUCTION_SQL_SNAPSHOT_ZLIB_B64`; the runner
+expands it into a new mode-0600 file with a 1 MB limit. To prepare that value
+privately, use Python to write `base64.b64encode(zlib.compress(snapshot_bytes, 9))`
+to a mode-0600 file outside the repository, then supply its contents through
+the protected GitHub secret interface. Never print it in CI logs or commit it.
+The SHA-256 in `manual_sql_review` covers the **uncompressed** JSON bytes.
+For the current 79,952-byte snapshot, the encoded compressed value is 4,748
+bytes. Do not activate the workflow until all other release gates pass.
 
 Startup exception collection remains a hosting-side operation: Winserve must
 confirm a private writable log directory outside public `wwwroot`, log rotation

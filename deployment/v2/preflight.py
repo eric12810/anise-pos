@@ -6,11 +6,13 @@ metadata-only SQL results without giving GitHub an unrestricted SQL credential.
 from datetime import datetime, timezone, timedelta
 import json
 import re
+from . import manual_sql
 
 from .model import SHA
 
 
-def validate_evidence(raw, target, artifact, *, now=None):
+def validate_evidence(raw, target, artifact, *, now=None, sql_snapshot=None, expected_schema=None,
+                      release=None, db_probe=None):
     target.validate()
     evidence = json.loads(raw)
     now = now or datetime.now(timezone.utc)
@@ -25,20 +27,24 @@ def validate_evidence(raw, target, artifact, *, now=None):
         if evidence["sql_database"] != target.database or not evidence["sql_server"]:
             raise ValueError("SQL identity mismatch")
         if target.name == "production":
-            review = evidence["manual_sql_review"]
-            reviewed = datetime.fromisoformat(review["checked_at"].replace("Z", "+00:00"))
-            if (reviewed.tzinfo is None or not now - timedelta(hours=24) <= reviewed <= now + timedelta(minutes=5)
-                    or review["method"] != "manual_readonly_metadata"
-                    or not re.fullmatch(r"[A-Za-z0-9_.-]{3,80}", review["reviewed_by"])
-                    or not re.fullmatch(r"[A-Za-z0-9_./:-]{12,200}", review["record_reference"])
-                    or review["server"] != evidence["sql_server"]
-                    or review["database"] != target.database
-                    or review["artifact_sha256"] != artifact
-                    or review["mapped_columns_checked"] is not True
-                    or review["missing_mapped_columns"] != []
-                    or review["required_index_present"] is not True
-                    or review["migration_checksums_checked"] is not True):
-                raise ValueError("Fresh reviewed production SQL evidence is required")
+            mode = evidence["sql_mode"]
+            if mode == "manual":
+                if sql_snapshot is None or expected_schema is None or release is None:
+                    raise ValueError("Private SQL snapshot and exact release model required")
+                manual_sql.validate(sql_snapshot, expected_schema, evidence["manual_sql_review"], artifact, release, now=now)
+                if evidence["sql_server"] != evidence["manual_sql_review"]["observed_server"]:
+                    raise ValueError("SQL server observation mismatch")
+            elif mode == "automated":
+                if db_probe is None:
+                    raise ValueError("Protected read-only SQL probe required")
+                probe = json.loads(db_probe)
+                if (probe["server"] != evidence["sql_server"] or probe["database"] != target.database
+                        or probe["connected"] is not True or probe["permission_restricted"] is not True
+                        or probe["schema_compatible"] is not True or probe["missing_columns"] != []
+                        or probe["missing_required_index"] is not False):
+                    raise ValueError("Automated read-only SQL probe failed")
+            else:
+                raise ValueError("Explicit SQL preflight mode required")
         if evidence["artifact_sha256"] != artifact or not SHA.fullmatch(artifact):
             raise ValueError("Evidence does not cover this exact artifact")
         if evidence["effective_iis_config_checked"] is not True:
