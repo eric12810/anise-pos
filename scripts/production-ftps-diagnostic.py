@@ -1,5 +1,6 @@
 """Read-only curl and FTP_TLS probes of the production POS FTP home."""
 import ftplib
+from collections import Counter
 import json
 import os
 from pathlib import PurePosixPath
@@ -112,9 +113,28 @@ def curl_web_config(config):
         raise RuntimeError('Read-only web.config retrieval failed (curl exit ' + str(result.returncode) + ')')
     try:
         root = ET.fromstring(result.stdout)
-        settings = {item.get('name'): item.get('value', '') for item in root.iter('environmentVariable')}
+        entries = list(root.iter('environmentVariable'))
+        settings = {item.get('name'): item.get('value', '') for item in entries}
     except ET.ParseError:
         raise RuntimeError('Production web.config XML could not be parsed') from None
+    duplicate_names = sorted(name for name, count in Counter(item.get('name') for item in entries).items() if count > 1)
+    print('web.config duplicate variable names: ' + (', '.join(duplicate_names) or 'none'))
+    aspnet = root.find('.//aspNetCore')
+    if (aspnet is None or aspnet.get('processPath') != 'dotnet'
+            or aspnet.get('arguments') != r'.\AnisePOS.Api.dll'
+            or aspnet.get('hostingModel') != 'inprocess'):
+        raise RuntimeError('Production IIS entry point differs from the reviewed framework-dependent package')
+    if settings.get('ASPNETCORE_ENVIRONMENT') != 'Production':
+        raise RuntimeError('Production ASPNETCORE_ENVIRONMENT missing or incorrect')
+    connection = settings.get('ConnectionStrings__AniseDatabase', '')
+    server = re.search(r'(?:^|;)\s*(?:Server|Data Source)\s*=\s*([^;]+)', connection, re.I)
+    database = re.search(r'(?:^|;)\s*(?:Database|Initial Catalog)\s*=\s*([^;]+)', connection, re.I)
+    if (not server or server.group(1).strip().lower() != 'mssqluk20.prosql.net'
+            or not database or database.group(1).strip().lower() != 'anisedatabase'
+            or not re.search(r'(?:^|;)\s*(?:User Id|UID)\s*=', connection, re.I)
+            or not re.search(r'(?:^|;)\s*(?:Password|PWD)\s*=', connection, re.I)):
+        raise RuntimeError('Production database connection identity or authentication fields differ from approved values')
+    print('PASS: production IIS entry point, environment and database target; credentials withheld')
     missing = sorted(STRIPE_SETTINGS - settings.keys())
     print('web.config Stripe setting names: ' + (', '.join(sorted(STRIPE_SETTINGS & settings.keys())) or 'none'))
     if missing:
@@ -127,6 +147,8 @@ def curl_web_config(config):
         url = urlparse(settings[name])
         if url.scheme != 'https' or url.hostname not in {'loveanise.co.uk', 'www.loveanise.co.uk'} or url.port is not None or url.username or url.password or url.fragment:
             raise RuntimeError(name + ' is not an approved production URL')
+    if duplicate_names:
+        raise RuntimeError('Production web.config contains duplicate environment variable names')
     print('PASS: web.config contains production Stripe Checkout settings with valid modes and URL hosts; values withheld')
 
 
