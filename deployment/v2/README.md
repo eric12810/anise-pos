@@ -47,6 +47,18 @@ tested and explicitly accepted.
    and two distinct retained/restorable application and SQL backups. The engine
    verifies and archives all current managed files before uploading. No SQL is
    changed. No release is called healthy before the retried health response.
+   For the **first** V2 production release only, select `first_release` and
+   supply the exact `APPROVE FIRST POS V2 PRODUCTION RELEASE` phrase. The same
+   protected workflow verifies the existing legacy production manifest and
+   every listed live file, retains a checksum-verified archive before upload,
+   and rechecks the live bytes against that archive immediately before install.
+   The previous application is recorded as **unhealthy/health unverified**;
+   it is never seeded as a healthy V2 release. A healthy V2 pointer is created
+   only if the new release's application and database health checks pass.
+   On failure, maintenance remains and the failed release is recorded. Recovery
+   from the legacy archive then requires a separately reviewed manual action;
+   the normal V2 rollback workflow cannot claim that unhealthy legacy state
+   was healthy. This path leaves hosted configuration and SQL unchanged.
 3. **Rollback** requires protected production approval, exact failed release
    SHA, and the pre-release application archive. It verifies the archive against
    the last healthy server pointer, verifies failed-release-only files before

@@ -76,6 +76,29 @@ class CliSeedGuards(unittest.TestCase):
                 cli.main(["rollback", "--environment", "production", "--release", OLD, "--archive", "backup.zip"])
             ftps.assert_not_called()
 
+    def test_first_release_requires_activation_and_exact_approval_before_ftps(self):
+        args = ["initial-backup", "--environment", "production", "--release", OLD,
+                "--archive", "legacy.zip", "--evidence", __file__, "--sql-mode", "manual"]
+        with mock.patch.object(cli, "target_from_env", return_value=PROD), \
+             mock.patch.object(cli, "package", return_value=({}, "a" * 64)), \
+             mock.patch.object(cli, "read_private", side_effect=[b'{"sql_mode":"manual"}', b'{}', b'{}']), \
+             mock.patch.object(cli, "validate_evidence", return_value=True), \
+             mock.patch.object(cli, "CurlFTPS") as ftps:
+            with mock.patch.dict(os.environ, {"V2_ACTIVATED": "", "V2_INITIAL_RELEASE_APPROVAL":
+                                           "APPROVE FIRST POS V2 PRODUCTION RELEASE"}):
+                with self.assertRaisesRegex(ValueError, "dormant"):
+                    cli.main(args)
+            ftps.assert_not_called()
+        with mock.patch.object(cli, "target_from_env", return_value=PROD), \
+             mock.patch.object(cli, "package", return_value=({}, "a" * 64)), \
+             mock.patch.object(cli, "read_private", side_effect=[b'{"sql_mode":"manual"}', b'{}', b'{}']), \
+             mock.patch.object(cli, "validate_evidence", return_value=True), \
+             mock.patch.object(cli, "CurlFTPS") as ftps:
+            with mock.patch.dict(os.environ, {"V2_ACTIVATED": "yes", "V2_INITIAL_RELEASE_APPROVAL": ""}):
+                with self.assertRaisesRegex(ValueError, "approval"):
+                    cli.main(args)
+            ftps.assert_not_called()
+
     def test_production_preflight_only_never_constructs_transport(self):
         with tempfile.TemporaryDirectory() as folder:
             evidence = Path(folder) / "preflight.json"
@@ -250,6 +273,50 @@ class V2Tests(unittest.TestCase):
                          "verified healthy after rollback")
         self.assertNotIn(engine.OFFLINE, ftp.files)
         self.assertEqual(ftp.files["AnisePOS.Api.dll"], b"old")
+
+    def test_first_release_archives_unhealthy_legacy_bytes_then_establishes_health(self):
+        ftp = FakeFTP(PROD)
+        ftp.files["AnisePOS.Api.dll"] = b"old"
+        ftp.files["wwwroot/pos.html"] = b"pos"
+        legacy = {"version": 1, "environment": "production", "application": "pos.loveanise.co.uk",
+                  "files": {name: hashlib.sha256(ftp.files[name]).hexdigest()
+                            for name in ("AnisePOS.Api.dll", "wwwroot/pos.html")}}
+        ftp.files[engine.LEGACY] = json.dumps(legacy).encode()
+        archive = Path(self.temp.name) / "legacy.zip"
+        self.assertEqual(len(engine.backup_legacy(ftp, PROD, archive)), 2)
+        self.assertNotIn(engine.CURRENT, ftp.files)
+        replacement = artifact(Path(self.temp.name) / "replacement", b"new")
+        self.assertEqual(engine.deploy_initial(ftp, PROD, replacement, NEW, archive,
+                                               health_check=lambda _: None, sleeper=lambda _: None),
+                         "first V2 production release verified healthy")
+        self.assertEqual(model.parse_state(ftp.files[engine.CURRENT], PROD)["phase"], "healthy")
+        self.assertEqual(ftp.files["web.config"], b"hosted config")
+        self.assertNotIn(engine.OFFLINE, ftp.files)
+
+    def test_first_release_rejects_drift_and_retains_maintenance_on_health_failure(self):
+        ftp = FakeFTP(PROD)
+        ftp.files["AnisePOS.Api.dll"] = b"old"
+        ftp.files["wwwroot/pos.html"] = b"pos"
+        legacy = {"version": 1, "environment": "production", "application": "pos.loveanise.co.uk",
+                  "files": {name: hashlib.sha256(ftp.files[name]).hexdigest()
+                            for name in ("AnisePOS.Api.dll", "wwwroot/pos.html")}}
+        ftp.files[engine.LEGACY] = json.dumps(legacy).encode()
+        archive = Path(self.temp.name) / "legacy.zip"
+        engine.backup_legacy(ftp, PROD, archive)
+        replacement = artifact(Path(self.temp.name) / "replacement", b"new")
+        ftp.files["AnisePOS.Api.dll"] = b"drift"
+        with self.assertRaisesRegex(RuntimeError, "changed after backup"):
+            engine.deploy_initial(ftp, PROD, replacement, NEW, archive,
+                                  health_check=lambda _: None, sleeper=lambda _: None)
+        self.assertNotIn(engine.OFFLINE, ftp.files)
+        ftp.files["AnisePOS.Api.dll"] = b"old"
+        with self.assertRaisesRegex(RuntimeError, "500.30"):
+            engine.deploy_initial(ftp, PROD, replacement, NEW, archive,
+                                  health_check=lambda _: (_ for _ in ()).throw(RuntimeError("500.30")),
+                                  sleeper=lambda _: None)
+        self.assertIn(engine.OFFLINE, ftp.files)
+        self.assertNotIn(engine.HEALTHY, ftp.files)
+        self.assertEqual(model.parse_state(ftp.files[engine.record_name(NEW)], PROD)["phase"], "failed")
 
     def test_backups_refuse_live_drift(self):
         ftp = FakeFTP()

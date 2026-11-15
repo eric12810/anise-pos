@@ -8,11 +8,12 @@ import time
 from urllib.request import urlopen
 import zipfile
 
-from .model import package, parse_state, state_bytes
+from .model import SHA, package, parse_state, safe_name, state_bytes
 
 CURRENT = ".anise-v2-current.json"
 HEALTHY = ".anise-v2-healthy.json"
 OFFLINE = "app_offline.htm"
+LEGACY = ".anise-pos-production-deployment.json"
 
 
 def record_name(release):
@@ -171,6 +172,104 @@ def backup_current(ftp, target, destination):
             if sha256(archive.read("files/" + name)).hexdigest() != digest:
                 raise RuntimeError("Application archive checksum verification failed")
     return current
+
+
+def legacy_files(ftp, target):
+    """Read and verify the existing production manifest without asserting health."""
+    if target.name != "production":
+        raise ValueError("Initial release is production-only")
+    ftp.cwd(target.root)
+    names = set(ftp.list())
+    if (LEGACY not in names or "web.config" not in names or OFFLINE in names
+            or any(name.startswith(".anise-v2-") or name in (LEGACY + ".pending", LEGACY + ".previous")
+                   for name in names)):
+        raise RuntimeError("Production legacy state requires manual recovery review")
+    raw = ftp.get(LEGACY)
+    if len(raw) > 1_000_000:
+        raise ValueError("Legacy manifest oversized")
+    state = json.loads(raw)
+    files = state.get("files")
+    if (state.get("version") != 1 or state.get("environment") != "production"
+            or state.get("application") != "pos.loveanise.co.uk"
+            or not isinstance(files, dict) or not files):
+        raise ValueError("Legacy manifest identity invalid")
+    for name, digest in files.items():
+        safe_name(name)
+        if not isinstance(digest, str) or not SHA.fullmatch(digest):
+            raise ValueError("Legacy manifest file digest invalid")
+    return raw, files
+
+
+def backup_legacy(ftp, target, destination):
+    """Archive exact legacy managed bytes, labelled unverified health."""
+    raw, files = legacy_files(ftp, target)
+    with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+        archive.writestr("legacy-manifest.json", raw)
+        for name, digest in sorted(files.items()):
+            content = ftp.get(name)
+            if sha256(content).hexdigest() != digest:
+                raise RuntimeError("Live legacy file differs from manifest: " + name)
+            archive.writestr("files/" + name, content)
+    with zipfile.ZipFile(destination) as archive:
+        if (len(archive.namelist()) != len(files) + 1
+                or set(archive.namelist()) != {"legacy-manifest.json"} | {"files/" + name for name in files}):
+            raise RuntimeError("Legacy backup archive incomplete")
+        if archive.read("legacy-manifest.json") != raw or any(
+                sha256(archive.read("files/" + name)).hexdigest() != digest for name, digest in files.items()):
+            raise RuntimeError("Legacy backup archive checksum mismatch")
+    return files
+
+
+def deploy_initial(ftp, target, root, release, archive_path, *, health_check=health, sleeper=time.sleep):
+    """First V2 release from a byte-verified, archived unhealthy legacy state."""
+    files, artifact = package(root)
+    with zipfile.ZipFile(archive_path) as archive:
+        raw = archive.read("legacy-manifest.json")
+        archived = json.loads(raw)["files"]
+        if (len(archive.namelist()) != len(archived) + 1
+                or set(archive.namelist()) != {"legacy-manifest.json"} | {"files/" + name for name in archived}):
+            raise RuntimeError("Initial release archive is incomplete")
+        for name, digest in archived.items():
+            safe_name(name)
+            if not SHA.fullmatch(digest) or sha256(archive.read("files/" + name)).hexdigest() != digest:
+                raise RuntimeError("Initial release archive checksum mismatch")
+    live_raw, live_files = legacy_files(ftp, target)
+    if live_raw != raw or live_files != archived:
+        raise RuntimeError("Production legacy manifest changed after backup")
+    if set(live_files) - set(files):
+        raise RuntimeError("New artifact removes legacy managed files; compatibility review required")
+    for name, digest in live_files.items():
+        if sha256(ftp.get(name)).hexdigest() != digest:
+            raise RuntimeError("Production file changed after backup: " + name)
+    marker = b"<html><body>POS first release in progress</body></html>\n"
+    transitions = []
+    verified_put(ftp, OFFLINE, marker)
+    try:
+        sleeper(15)
+        install_files(ftp, target, root, files)
+        for phase in ("uploaded", "installed"):
+            transitions.append(phase)
+            publish_state(ftp, target, record_name(release),
+                          state_bytes(target, release, artifact, phase, files, history=transitions.copy()))
+        ftp.delete(OFFLINE)
+        health_check(target.url)
+        healthy = state_bytes(target, release, artifact, "healthy", files,
+                              history=transitions + ["healthy"])
+        publish_state(ftp, target, record_name(release), healthy)
+        publish_state(ftp, target, HEALTHY, healthy)
+        publish_state(ftp, target, CURRENT, healthy)
+        return "first V2 production release verified healthy"
+    except Exception:
+        try:
+            ftp.cwd(target.root)
+            if OFFLINE not in ftp.list():
+                verified_put(ftp, OFFLINE, marker)
+            failed = state_bytes(target, release, artifact, "failed", files,
+                                 history=transitions + ["failed"])
+            publish_state(ftp, target, record_name(release), failed)
+        except Exception:
+            pass
+        raise
 
 
 def deploy(ftp, target, root, release, *, health_check=health, sleeper=time.sleep):
