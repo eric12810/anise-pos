@@ -58,6 +58,7 @@ _No website-only tasks recorded yet. Add them here as they arise._
   - Add a backup step before each production deployment in the relevant GitHub Actions workflows.
   - Retrieve the current live website and POS files over FTPS, keeping their backups separate.
   - Save a timestamped backup with the environment, Git commit and file manifest/checksums, in private storage with an appropriate retention policy.
+  - For **POS V2 during active development**, use the existing protected rollback workflow and GitHub Actions artifacts with 90-day retention. Before each production file upload, read and SHA-256 verify every managed live file, create and verify a recoverable application archive tied to the exact release commit and manifest, and retain it. Check that rollback archives are downloadable and usable; arrange another verified recovery route before any required artifact expires. Frequent deployments alone do not guarantee indefinite retention.
   - Fail closed: **do not start uploading the new release unless the full backup has completed and passed verification**.
   - Protect secrets and sensitive configuration; encrypt backups when required, restrict access and keep credentials out of logs.
   - Test backup and manual restore procedures on staging before relying on them in production.
@@ -68,6 +69,11 @@ _No website-only tasks recorded yet. Add them here as they arise._
   - Back up production data independently of the website/POS file backups; document retention, encryption, access and recovery.
   - Test restoring to a separate non-production database, never over the production database during verification.
   - Decide whether database backup verification should be a mandatory deployment gate once implemented.
+
+- [ ] **Post-deployment / low priority: archive the final stable POS release for long-term recovery**
+  - Once the POS is operational and stable, download and independently verify the final known-good **application release itself**, not only its predecessor's rollback archive. Record the exact Git commit, release manifest, SHA-256 checksums, required hosted configuration and recovery instructions.
+  - Keep an independent application copy in Dropbox or iCloud Drive after deployment work is complete; do not add a cloud integration to the current V2 workflows.
+  - Preserve a **separate restorable SQL backup** and document recovery after months or years without deployments. Check SQL backup and restore readiness occasionally because production data continues to change even when application files do not.
 
 - [ ] **Add automated post-deployment production smoke tests for website and POS**
   - Integrate checks into both live GitHub Actions workflows after a successful deployment; also allow manual runs.
