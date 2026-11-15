@@ -1,4 +1,5 @@
 using AnisePOS.Api.Domain;
+using AnisePOS.Api.Data;
 using AnisePOS.Api.Endpoints;
 using AnisePOS.Api.Notifications;
 using AnisePOS.Api;
@@ -7,8 +8,23 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Cors.Infrastructure;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Configuration;
+using Microsoft.EntityFrameworkCore;
 using System.Security.Cryptography;
 using WebPush;
+
+// Run the production-only EF schema mapping without opening a SQL connection.
+using (var model = new AniseDbContext(new DbContextOptionsBuilder<AniseDbContext>()
+           .UseSqlServer("Server=localhost;Database=offline-model-check").Options))
+{
+    var columns = ProductionSchemaRequirements.MappedColumns(model.Model);
+    if (columns.Length == 0 || columns.Any(x => x.EndsWith('.')) ||
+        columns.Length != columns.Distinct(StringComparer.OrdinalIgnoreCase).Count() ||
+        !columns.Contains("dbo.Orders.Id") ||
+        !columns.Contains("dbo.WebsiteCheckouts.ReconciliationError") ||
+        !columns.Contains("dbo.Refunds.Id"))
+        throw new Exception("Production EF schema mapping returned missing or malformed column names.");
+    Console.WriteLine($"Passed production EF schema mapping for {columns.Length} columns without SQL access.");
+}
 
 var day1 = new DateTimeOffset(2026, 11, 12, 0, 0, 0, TimeSpan.Zero);
 var day2 = day1.AddDays(1);
