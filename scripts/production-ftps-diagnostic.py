@@ -1,6 +1,7 @@
 """Read-only curl and FTP_TLS probes of the production POS FTP home."""
 import ftplib
 from collections import Counter
+from hashlib import sha256
 import json
 import os
 from pathlib import PurePosixPath
@@ -111,6 +112,7 @@ def curl_web_config(config):
     ], input=('user = "' + escaped + '"\n').encode(), capture_output=True, check=False)
     if result.returncode:
         raise RuntimeError('Read-only web.config retrieval failed (curl exit ' + str(result.returncode) + ')')
+    print('web.config SHA-256: ' + sha256(result.stdout).hexdigest())
     try:
         root = ET.fromstring(result.stdout)
         entries = list(root.iter('environmentVariable'))
