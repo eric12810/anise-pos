@@ -39,9 +39,10 @@ tested and explicitly accepted.
    the release marked healthy. A failed install leaves `app_offline.htm` and the
    last healthy pointer intact.
 2. **Production** resolves a successful V2 staging run and its unexpired exact
-   artifact. A protected environment approval gates the job. The read-only SQL
-   probe checks the connected database and mapped schema without starting the
-   API. Fresh protected evidence must identify the effective IIS site/config,
+   artifact. A protected environment approval gates the job. A fresh, manually
+   reviewed metadata-only SQL record checks database identity, mapped schema,
+   index and migrations without starting the API or placing SQL credentials in
+   GitHub Actions. Protected evidence must identify the effective IIS site/config,
    SQL identity, runtime, working secure startup logging, schema compatibility,
    and two distinct retained/restorable application and SQL backups. The engine
    verifies and archives all current managed files before uploading. No SQL is
@@ -88,11 +89,23 @@ and expires after 24 hours. Required fields are:
   "ftps_host": "HOST_VERIFIED_IN_WINSERVE",
   "ftps_user": "liveposftp",
   "ftps_root": "/wwwroot",
-  "sql_server": "SERVER_RETURNED_BY_READ_ONLY_SQL_PROBE",
+  "sql_server": "SERVER_RETURNED_BY_MANUAL_READ_ONLY_QUERY",
   "sql_database": "anisedatabase",
   "artifact_sha256": "64_HEX_CHARACTERS_FROM_PACKAGE_MANIFEST",
   "effective_iis_config_checked": true,
-  "sql_readonly_probe_passed": true,
+  "manual_sql_review": {
+    "checked_at": "2026-11-14T18:00:00Z",
+    "method": "manual_readonly_metadata",
+    "reviewed_by": "OWNER_ID",
+    "record_reference": "private/sql/review-2026-11-14",
+    "server": "SERVER_RETURNED_BY_MANUAL_READ_ONLY_QUERY",
+    "database": "anisedatabase",
+    "artifact_sha256": "SAME_64_HEX_PACKAGE_MANIFEST_SHA256",
+    "mapped_columns_checked": true,
+    "missing_mapped_columns": [],
+    "required_index_present": true,
+    "migration_checksums_checked": true
+  },
   "schema_compatible": true,
   "runtime_compatible": true,
   "startup_logging_verified": true,
@@ -107,15 +120,18 @@ and expires after 24 hours. Required fields are:
 These booleans are attestations, not automatic Winserve or backup-provider
 checks. Before activation, an authorised operator must verify the **effective**
 IIS `web.config`, inherited/site variables and `ConnectionStrings__AniseDatabase`,
-read-only SQL login and `DB_NAME()`/`@@SERVERNAME`, .NET runtime, actual stdout
+`DB_NAME()`/`@@SERVERNAME` from an authorised manual metadata-only SQL session, .NET runtime, actual stdout
 logging location/permissions/retention, and restorable private backups. Do not
 place a connection string, password or log contents in this JSON. The workflow
-also runs `DbProbe` against SQL with a protected read-only login, verifies its
-identity against this evidence, checks that the probe login lacks write access
-to mapped tables, and fails on missing mapped columns or the required payment
-index. The protected schema attestation must also cover types, constraints,
-indexes and migration history; the probe is not a full schema diff. It does
-not execute the API's startup SQL.
+requires a fresh owner-reviewed SQL record bound to the same artifact checksum.
+Use only `SELECT` and metadata inspection in the existing VS Code connection;
+record the server/database identity, mapped-column comparison, required payment
+index, types, constraints, other indexes, migration history where available,
+checked-in migration checksums and an explicit empty pending-migration list. The existing login may
+have write privileges, so the manual query restriction is procedural rather
+than enforced by SQL permissions. Never put that unrestricted credential in
+GitHub Actions or mark a check passed without its private review record. The
+workflow does not connect to SQL or execute the API's write-capable startup SQL.
 
 Startup exception collection remains a hosting-side operation: Winserve must
 confirm a private writable log directory outside public `wwwroot`, log rotation

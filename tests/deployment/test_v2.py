@@ -3,6 +3,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 import unittest
 from unittest import mock
@@ -30,7 +31,7 @@ class CliSeedGuards(unittest.TestCase):
              mock.patch.object(cli, "validate_evidence"):
             args = ["seed", "--environment", environment, "--release", OLD]
             if environment == "production":
-                args += ["--evidence", __file__, "--db-probe", __file__]
+                args += ["--evidence", __file__]
             try:
                 cli.main(args)
                 error = None
@@ -247,19 +248,51 @@ class V2Tests(unittest.TestCase):
                         ftps_host=PROD.host, ftps_root=PROD.root, ftps_user=PROD.user,
                         sql_database=PROD.database, sql_server="mssqluk20.prosql.net",
                         artifact_sha256=digest, effective_iis_config_checked=True,
-                        sql_readonly_probe_passed=True, schema_compatible=True,
+                        schema_compatible=True,
                         runtime_compatible=True, startup_logging_verified=True,
                         pending_sql_migrations=[], backups={
                             "application": {"reference": "private/app/backup-123", "restorable": True, "retained": True},
-                            "database": {"reference": "private/sql/backup-123", "restorable": True, "retained": True}})
+                            "database": {"reference": "private/sql/backup-123", "restorable": True, "retained": True}},
+                        manual_sql_review={
+                            "checked_at": "2026-11-14T18:00:00Z", "method": "manual_readonly_metadata",
+                            "reviewed_by": "owner", "record_reference": "private/sql/review-123",
+                            "server": "mssqluk20.prosql.net", "database": "anisedatabase",
+                            "artifact_sha256": digest, "mapped_columns_checked": True,
+                            "missing_mapped_columns": [], "required_index_present": True,
+                            "migration_checksums_checked": True})
         from datetime import datetime, timezone
         now = datetime(2026, 11, 14, 19, tzinfo=timezone.utc)
-        probe = json.dumps({"database": "anisedatabase", "server": "mssqluk20.prosql.net", "connected": True,
-                            "schema_compatible": True, "missing_columns": [], "missing_required_index": False})
-        self.assertTrue(preflight.validate_evidence(json.dumps(evidence), PROD, digest, db_probe=probe, now=now))
+        self.assertTrue(preflight.validate_evidence(json.dumps(evidence), PROD, digest, now=now))
         evidence["sql_database"] = "anisedb"
         with self.assertRaises(ValueError):
-            preflight.validate_evidence(json.dumps(evidence), PROD, digest, db_probe=probe, now=now)
+            preflight.validate_evidence(json.dumps(evidence), PROD, digest, now=now)
+        evidence["sql_database"] = "anisedatabase"
+        for key, value in (("database", "anisedb"), ("artifact_sha256", "0" * 64),
+                           ("missing_mapped_columns", ["dbo.Orders.Id"]), ("required_index_present", False),
+                           ("migration_checksums_checked", False), ("record_reference", "")):
+            review = evidence["manual_sql_review"].copy()
+            review[key] = value
+            evidence["manual_sql_review"] = review
+            with self.assertRaises(ValueError, msg=key):
+                preflight.validate_evidence(json.dumps(evidence), PROD, digest, now=now)
+            evidence["manual_sql_review"][key] = {"database": "anisedatabase", "artifact_sha256": digest,
+                "missing_mapped_columns": [], "required_index_present": True,
+                "migration_checksums_checked": True, "record_reference": "private/sql/review-123"}[key]
+        evidence["manual_sql_review"]["checked_at"] = "2026-11-10T18:00:00Z"
+        with self.assertRaises(ValueError):
+            preflight.validate_evidence(json.dumps(evidence), PROD, digest, now=now)
+
+    def test_manual_sql_review_script_has_no_write_statement(self):
+        script = Path("deployment/v2/manual-sql-review.sql").read_text()
+        sql = "\n".join(line.split("--", 1)[0] for line in script.splitlines())
+        self.assertFalse(re.search(r"\b(INSERT|UPDATE|DELETE|ALTER|CREATE|DROP|EXEC|MERGE|TRUNCATE)\b", sql, re.I))
+        self.assertIn("SELECT DB_NAME()", sql)
+
+    def test_production_template_does_not_receive_sql_credentials(self):
+        workflow = Path("deployment/v2/workflows/pos-v2-production.yml").read_text()
+        self.assertNotIn("V2_SQL_CONNECTION", workflow)
+        self.assertNotIn("V2_PRODUCTION_READONLY_SQL_CONNECTION", workflow)
+        self.assertIn("manual SQL evidence", workflow)
 
     def test_curl_transport_preserves_winserve_rename_and_secret_handling(self):
         ftp = transport.CurlFTPS(PROD, "private-password")

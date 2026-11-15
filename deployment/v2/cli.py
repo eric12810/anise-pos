@@ -25,7 +25,6 @@ def main(argv=None):
     parser.add_argument("--release", default="")
     parser.add_argument("--archive", default="")
     parser.add_argument("--evidence", default="")
-    parser.add_argument("--db-probe", default="")
     args = parser.parse_args(argv)
     target = target_from_env(args.environment)
     target.validate()
@@ -48,10 +47,9 @@ def main(argv=None):
         print("Validated package:", len(files), "files; manifest SHA-256", digest)
         return
     if args.environment == "production":
-        if not args.evidence or not args.db_probe:
-            raise ValueError("Protected production evidence and live read-only SQL probe are required")
-        validate_evidence(Path(args.evidence).read_text(), target, digest,
-                          db_probe=Path(args.db_probe).read_text())
+        if not args.evidence:
+            raise ValueError("Protected production preflight evidence is required")
+        validate_evidence(Path(args.evidence).read_text(), target, digest)
     if args.command == "preflight":
         print("Protected preflight evidence validated for exact artifact")
         return
