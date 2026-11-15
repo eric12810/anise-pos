@@ -7,7 +7,6 @@ using AnisePOS.Api.Notifications;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.AspNetCore.RateLimiting;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
@@ -96,16 +95,7 @@ if (app.Environment.IsProduction())
         JOIN sys.tables AS t ON t.schema_id = s.schema_id
         JOIN sys.columns AS c ON c.object_id = t.object_id
         """).ToListAsync()).ToHashSet(StringComparer.OrdinalIgnoreCase);
-    var missingMappedColumns = db.Model.GetEntityTypes()
-        .Where(entity => entity.GetTableName() is not null)
-        .SelectMany(entity =>
-        {
-            var table = entity.GetTableName()!;
-            var schema = entity.GetSchema() ?? "dbo";
-            var store = StoreObjectIdentifier.Table(table, schema);
-            return entity.GetProperties().Select(property =>
-                $"{schema}.{table}.{property.GetColumnName(store)}");
-        })
+    var missingMappedColumns = ProductionSchemaRequirements.MappedColumns(db.Model)
         .Where(column => !existingColumns.Contains(column));
     var missing = await db.Database.SqlQueryRaw<string>("""
         SELECT Requirement AS Value

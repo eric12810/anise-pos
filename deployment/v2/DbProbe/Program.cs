@@ -10,7 +10,7 @@ if (args.Length == 1 && args[0] == "--check-model")
 {
     var offlineOptions = new DbContextOptionsBuilder<AniseDbContext>().UseSqlServer("Server=localhost;Database=offline-model-check").Options;
     await using var offlineContext = new AniseDbContext(offlineOptions);
-    Console.WriteLine("Mapped SQL columns: " + MappedColumns(offlineContext).Length);
+    Console.WriteLine("Mapped SQL columns: " + ProductionSchemaRequirements.MappedColumns(offlineContext.Model).Length);
     return;
 }
 if (args.Length == 2 && args[0] == "--schema-json")
@@ -90,7 +90,7 @@ try
 
     var options = new DbContextOptionsBuilder<AniseDbContext>().UseSqlServer(builder.ConnectionString).Options;
     await using var context = new AniseDbContext(options);
-    var required = MappedColumns(context);
+    var required = ProductionSchemaRequirements.MappedColumns(context.Model);
     var missing = required.Where(column => !columns.Contains(column)).OrderBy(x => x).ToArray();
     var migrationColumns = new[] {
         "dbo.Orders.CancelledAtUtc", "dbo.Orders.CancellationReason", "dbo.Orders.ReopenedAtUtc",
@@ -149,26 +149,4 @@ catch (Exception error)
     // SqlClient exception text can contain connection details; never print it.
     Console.Error.WriteLine("Read-only SQL probe failed: " + error.GetType().Name);
     Environment.ExitCode = 1;
-}
-
-static string[] MappedColumns(AniseDbContext context)
-{
-    var columns = context.Model.GetEntityTypes()
-        .Where(entity => entity.GetTableName() is not null)
-        .SelectMany(entity =>
-        {
-            var table = entity.GetTableName()!;
-            var schema = entity.GetSchema() ?? "dbo";
-            // EF's store identifier must retain the model's null default schema.
-            var store = StoreObjectIdentifier.Table(table, entity.GetSchema());
-            return entity.GetProperties().Select(property =>
-            {
-                var column = property.GetColumnName(store);
-                if (string.IsNullOrEmpty(column))
-                    throw new InvalidOperationException("EF mapped column name unavailable");
-                return $"{schema}.{table}.{column}";
-            });
-        }).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-    if (columns.Length == 0) throw new InvalidOperationException("No EF mapped columns found");
-    return columns;
 }

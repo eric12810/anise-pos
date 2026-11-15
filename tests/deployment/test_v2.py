@@ -249,6 +249,27 @@ class V2Tests(unittest.TestCase):
         self.assertEqual(model.parse_state(ftp.files[engine.HEALTHY], TARGET)["release"], OLD)
         self.assertEqual(model.parse_state(ftp.files[engine.record_name(NEW)], TARGET)["phase"], "failed")
 
+    def test_deploy_skips_only_preverified_unchanged_files(self):
+        ftp = FakeFTP()
+        baseline(ftp, self.root)
+        replacement = artifact(Path(self.temp.name) / "replacement", b"new")
+        with mock.patch.object(ftp, "put", wraps=ftp.put) as put:
+            engine.deploy(ftp, TARGET, replacement, NEW, health_check=lambda _: None, sleeper=lambda _: None)
+        uploaded = [call.args[0] for call in put.call_args_list]
+        self.assertIn("AnisePOS.Api.dll", uploaded)
+        self.assertNotIn("pos.html", uploaded)
+        self.assertEqual(ftp.files["wwwroot/pos.html"], b"pos")
+
+    def test_deploy_rejects_drift_before_skipping_unchanged_file(self):
+        ftp = FakeFTP()
+        baseline(ftp, self.root)
+        ftp.files["wwwroot/pos.html"] = b"unexpected change"
+        replacement = artifact(Path(self.temp.name) / "replacement", b"new")
+        with mock.patch.object(ftp, "put", wraps=ftp.put) as put:
+            with self.assertRaisesRegex(RuntimeError, "changed since healthy baseline"):
+                engine.deploy(ftp, TARGET, replacement, NEW, health_check=lambda _: None, sleeper=lambda _: None)
+        put.assert_not_called()
+
     def test_disposable_staging_ftps_probe_cleans_up(self):
         ftp = FakeFTP()
         result = engine.disposable_ftps_probe(ftp, TARGET)
