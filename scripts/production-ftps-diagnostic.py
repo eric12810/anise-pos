@@ -119,6 +119,8 @@ def curl_web_config(config):
         raise RuntimeError('Production web.config XML could not be parsed') from None
     duplicate_names = sorted(name for name, count in Counter(item.get('name') for item in entries).items() if count > 1)
     print('web.config duplicate variable names: ' + (', '.join(duplicate_names) or 'none'))
+    modes = [item.get('value', '') for item in entries if item.get('name') == 'WebsiteCheckout__StripeMode']
+    print('web.config Stripe mode entries: ' + ', '.join(mode if mode in {'live', 'Live'} else '<other>' for mode in modes))
     aspnet = root.find('.//aspNetCore')
     if (aspnet is None or aspnet.get('processPath') != 'dotnet'
             or aspnet.get('arguments') != r'.\AnisePOS.Api.dll'
