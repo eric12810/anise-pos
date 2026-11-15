@@ -6,7 +6,7 @@ import stat
 from pathlib import Path
 import sys
 
-from .engine import backup_current, deploy, rollback, seed, disposable_ftps_probe
+from .engine import backup_current, backup_legacy, deploy, deploy_initial, rollback, seed, disposable_ftps_probe
 from .model import Target, package
 from .preflight import validate_evidence
 from .transport import CurlFTPS
@@ -34,7 +34,7 @@ def read_private(path):
 
 def main(argv=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("package", "preflight", "backup", "deploy", "rollback", "seed", "ftps-probe"))
+    parser.add_argument("command", choices=("package", "preflight", "backup", "deploy", "initial-backup", "initial-deploy", "rollback", "seed", "ftps-probe"))
     parser.add_argument("--environment", choices=("staging", "production"), required=True)
     parser.add_argument("--artifact", default="artifacts/staging")
     parser.add_argument("--release", default="")
@@ -85,6 +85,10 @@ def main(argv=None):
     staging_seed = args.command == "seed" and args.environment == "staging"
     if not staging_seed and os.environ.get("V2_ACTIVATED") != "yes":
         raise ValueError("V2 is dormant until explicit workflow activation")
+    if args.command in ("initial-backup", "initial-deploy"):
+        if (args.environment != "production" or os.environ.get("V2_INITIAL_RELEASE_APPROVAL") != "APPROVE FIRST POS V2 PRODUCTION RELEASE"
+                or not args.archive or len(args.release) != 40):
+            raise ValueError("Exact first production release approval and archive required")
     if args.command == "seed":
         if os.environ.get("V2_SEED_APPROVAL") != "SEED POS V2 BASELINE" or len(args.release) != 40:
             raise ValueError("Reviewed baseline approval and exact commit SHA required")
@@ -101,6 +105,11 @@ def main(argv=None):
         print(deploy(ftp, target, args.artifact, args.release))
     elif args.command == "seed":
         print(seed(ftp, target, args.artifact, args.release))
+    elif args.command == "initial-backup":
+        files = backup_legacy(ftp, target, args.archive)
+        print("Archived", len(files), "legacy managed files; prior application health unverified")
+    elif args.command == "initial-deploy":
+        print(deploy_initial(ftp, target, args.artifact, args.release, args.archive))
 
 
 if __name__ == "__main__":

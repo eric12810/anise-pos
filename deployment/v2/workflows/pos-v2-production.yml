@@ -4,6 +4,8 @@ on:
     inputs:
       staging_run_id: {description: 'Verified V2 staging run ID', required: true, type: string}
       sql_mode: {description: 'Production SQL verification path', required: true, type: choice, options: [manual, automated]}
+      first_release: {description: 'First V2 release from verified legacy application backup', required: true, type: boolean, default: false}
+      first_release_approval: {description: 'Exact first-release approval phrase when selected', required: false, type: string}
 permissions: {contents: read, actions: read}
 concurrency: {group: anise-pos-production, cancel-in-progress: false}
 jobs:
@@ -68,6 +70,7 @@ jobs:
           V2_PRODUCTION_SITE_URL: https://pos.loveanise.co.uk
           V2_PRODUCTION_DATABASE: anisedatabase
       - name: Verify current managed files and retain pre-release archive
+        if: ${{ !inputs.first_release }}
         run: python3 -m deployment.v2.cli backup --environment production --evidence preflight.json --archive production-before.zip --release '${{ steps.resolve.outputs.release }}' --sql-mode '${{ inputs.sql_mode }}'
         env: &production_env
           V2_ACTIVATED: '${{ vars.V2_ACTIVATED }}'
@@ -77,6 +80,11 @@ jobs:
           V2_PRODUCTION_FTPS_ROOT: /wwwroot
           V2_PRODUCTION_SITE_URL: https://pos.loveanise.co.uk
           V2_PRODUCTION_DATABASE: anisedatabase
+          V2_INITIAL_RELEASE_APPROVAL: '${{ inputs.first_release_approval }}'
+      - name: Verify and archive existing legacy application without asserting health
+        if: ${{ inputs.first_release }}
+        run: python3 -m deployment.v2.cli initial-backup --environment production --evidence preflight.json --archive production-before.zip --release '${{ steps.resolve.outputs.release }}' --sql-mode '${{ inputs.sql_mode }}'
+        env: *production_env
       - uses: actions/upload-artifact@v4
         with:
           name: pos-v2-production-before-${{ github.run_id }}
@@ -84,5 +92,10 @@ jobs:
           if-no-files-found: error
           retention-days: 90
       - name: Install exact staging artifact and verify health
+        if: ${{ !inputs.first_release }}
         run: python3 -m deployment.v2.cli deploy --environment production --evidence preflight.json --release '${{ steps.resolve.outputs.release }}' --sql-mode '${{ inputs.sql_mode }}'
+        env: *production_env
+      - name: Install first V2 release and establish healthy baseline only after health verification
+        if: ${{ inputs.first_release }}
+        run: python3 -m deployment.v2.cli initial-deploy --environment production --evidence preflight.json --archive production-before.zip --release '${{ steps.resolve.outputs.release }}' --sql-mode '${{ inputs.sql_mode }}'
         env: *production_env
