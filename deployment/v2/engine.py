@@ -83,8 +83,11 @@ def directory_for(ftp, target, name):
         ftp.cwd(part)
 
 
-def install_files(ftp, target, root, files):
+def install_files(ftp, target, root, files, verified_existing=None):
     for name, digest in sorted(files.items()):
+        # The caller has already downloaded and hashed every managed live file.
+        if verified_existing is not None and verified_existing.get(name) == digest:
+            continue
         directory_for(ftp, target, name)
         data = (Path(root) / name).read_bytes()
         if sha256(data).hexdigest() != digest:
@@ -192,7 +195,7 @@ def deploy(ftp, target, root, release, *, health_check=health, sleeper=time.slee
     verified_put(ftp, OFFLINE, marker)
     try:
         sleeper(15)
-        install_files(ftp, target, root, files)
+        install_files(ftp, target, root, files, current["files"])
         uploaded = state_bytes(target, release, artifact, "uploaded", files, current["release"])
         transitions.append("uploaded")
         publish_state(ftp, target, record_name(release), uploaded)
