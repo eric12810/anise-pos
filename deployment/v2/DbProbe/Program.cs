@@ -150,4 +150,3 @@ catch (Exception error)
     Console.Error.WriteLine("Read-only SQL probe failed: " + error.GetType().Name);
     Environment.ExitCode = 1;
 }
-
