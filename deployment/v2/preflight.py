@@ -51,8 +51,16 @@ def validate_evidence(raw, target, artifact, *, now=None, sql_snapshot=None, exp
             raise ValueError("Active IIS configuration verification is required")
         if evidence["schema_compatible"] is not True or evidence["runtime_compatible"] is not True:
             raise ValueError("Schema or Winserve runtime compatibility unverified")
-        if evidence["startup_logging_verified"] is not True:
-            raise ValueError("Secure startup logging in active IIS site unverified")
+        logging = evidence["startup_logging"]
+        if logging == "verified":
+            if evidence["startup_logging_verified"] is not True:
+                raise ValueError("Secure startup logging in active IIS site unverified")
+        elif logging == "host_unavailable":
+            if (evidence["startup_logging_verified"] is not False
+                    or evidence["startup_logging_limitation_acknowledged"] is not True):
+                raise ValueError("Hosted startup logging limitation must be explicitly acknowledged")
+        else:
+            raise ValueError("Startup logging status missing or invalid")
         backups = evidence["backups"]
         for kind in ("application", "database"):
             backup = backups[kind]
