@@ -11,6 +11,12 @@ from .model import Target, package
 from .preflight import validate_evidence
 from .transport import CurlFTPS
 
+# Temporary exception for the staging release selected in production run 44098648326.
+# Remove after this release. The package, backup and post-install health gates remain.
+ONE_TIME_BYPASS_RUN = "44094631832"
+ONE_TIME_BYPASS_RELEASE = "45171e888f02ea082a9a567f453307ccbb3a9105"
+ONE_TIME_BYPASS_PHRASE = "BYPASS PREFLIGHT FOR 45171e888f02ea082a9a567f453307ccbb3a9105"
+
 
 def target_from_env(name):
     prefix = "V2_" + name.upper() + "_"
@@ -65,7 +71,14 @@ def main(argv=None):
     if args.command == "package":
         print("Validated package:", len(files), "files; manifest SHA-256", digest)
         return
-    if args.environment == "production":
+    bypass_requested = os.environ.get("V2_ONE_TIME_BYPASS_REQUESTED") == "true"
+    if bypass_requested:
+        if (args.command not in ("preflight", "backup", "deploy", "initial-backup", "initial-deploy")
+                or args.environment != "production" or args.release != ONE_TIME_BYPASS_RELEASE
+                or os.environ.get("V2_ONE_TIME_STAGING_RUN_ID") != ONE_TIME_BYPASS_RUN
+                or os.environ.get("V2_ONE_TIME_BYPASS_APPROVAL") != ONE_TIME_BYPASS_PHRASE):
+            raise ValueError("One-time preflight bypass does not match the approved release")
+    elif args.environment == "production":
         if not args.evidence:
             raise ValueError("Protected production preflight evidence is required")
         evidence_raw = read_private(args.evidence).decode("utf-8")
@@ -80,7 +93,8 @@ def main(argv=None):
                           expected_schema=read_private(schema_path) if mode == "manual" else None,
                           db_probe=read_private(probe_path).decode("utf-8") if mode == "automated" else None)
     if args.command == "preflight":
-        print("Protected preflight evidence validated for exact artifact")
+        print("Exact artifact validated; one-time preflight bypass active" if bypass_requested
+              else "Protected preflight evidence validated for exact artifact")
         return
     staging_seed = args.command == "seed" and args.environment == "staging"
     if not staging_seed and os.environ.get("V2_ACTIVATED") != "yes":
