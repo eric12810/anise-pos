@@ -223,7 +223,7 @@ app.UseStaticFiles(new StaticFileOptions
 {
     OnPrepareResponse = context =>
     {
-        if (context.File.Name is "pos.html" or "orders.html" or "orders.js" or "receipt.html")
+        if (context.File.Name is "pos.html" or "orders.html" or "orders.js" or "receipt.html" or "website-settings.html")
             context.Context.Response.Headers.CacheControl = "no-cache";
     }
 });
