@@ -234,7 +234,7 @@ public static class WebsiteOrderEndpoints
             {
                 var baseUrl = config["GoogleMail:TrackingBaseUrl"];
                 if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var tracking) || tracking.Scheme != "https" ||
-                    tracking.Host is not ("staging.anise.dotnetcloud.co.uk" or "www.loveanise.co.uk" or "loveanise.co.uk") ||
+                    tracking.Host is not ("staging.anise.dotnetcloud.co.uk" or "www.staging.loveanise.co.uk" or "staging.loveanise.co.uk" or "www.loveanise.co.uk" or "loveanise.co.uk") ||
                     !tracking.IsDefaultPort || !string.IsNullOrEmpty(tracking.UserInfo) || tracking.AbsolutePath != "/order-status.html" ||
                     !string.IsNullOrEmpty(tracking.Fragment) || !string.IsNullOrEmpty(tracking.Query))
                     return Results.Problem("Order confirmation is temporarily unavailable.", statusCode: 503);
@@ -383,7 +383,7 @@ public static class WebsiteOrderEndpoints
             {
                 var baseUrl = config["GoogleMail:TrackingBaseUrl"];
                 if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var trackingBase) || trackingBase.Scheme != "https" ||
-                    trackingBase.Host is not ("staging.anise.dotnetcloud.co.uk" or "www.loveanise.co.uk" or "loveanise.co.uk") ||
+                    trackingBase.Host is not ("staging.anise.dotnetcloud.co.uk" or "www.staging.loveanise.co.uk" or "staging.loveanise.co.uk" or "www.loveanise.co.uk" or "loveanise.co.uk") ||
                     !trackingBase.IsDefaultPort || !string.IsNullOrEmpty(trackingBase.UserInfo) ||
                     trackingBase.AbsolutePath != "/order-status.html" || !string.IsNullOrEmpty(trackingBase.Fragment) || !string.IsNullOrEmpty(trackingBase.Query))
                     return Results.Problem("Order confirmation is temporarily unavailable.", statusCode: 503);

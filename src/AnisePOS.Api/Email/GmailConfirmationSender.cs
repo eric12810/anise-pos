@@ -17,7 +17,7 @@ public sealed class GmailConfirmationSender(IHttpClientFactory clients, IConfigu
         if (!IsConfigured) throw new InvalidOperationException("Google Mail is not configured.");
         if (!ValidAddress(destination)) throw new ArgumentException("Invalid email address.", nameof(destination));
         if (!Uri.TryCreate(trackingUrl, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps ||
-            uri.Host is not ("staging.anise.dotnetcloud.co.uk" or "www.loveanise.co.uk" or "loveanise.co.uk") ||
+            uri.Host is not ("staging.anise.dotnetcloud.co.uk" or "www.staging.loveanise.co.uk" or "staging.loveanise.co.uk" or "www.loveanise.co.uk" or "loveanise.co.uk") ||
             !uri.IsDefaultPort || !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Query) ||
             uri.AbsolutePath != "/order-status.html" || !Guid.TryParse(uri.Fragment.TrimStart('#'), out _))
             throw new ArgumentException("Invalid tracking link.", nameof(trackingUrl));
