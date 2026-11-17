@@ -22,6 +22,28 @@ NEW = "b" * 40
 
 
 class CliSeedGuards(unittest.TestCase):
+    def test_one_time_preflight_bypass_is_limited_to_exact_run_and_release(self):
+        settings = {"V2_ONE_TIME_BYPASS_REQUESTED": "true",
+                    "V2_ONE_TIME_STAGING_RUN_ID": cli.ONE_TIME_BYPASS_RUN,
+                    "V2_ONE_TIME_BYPASS_APPROVAL": cli.ONE_TIME_BYPASS_PHRASE}
+        with mock.patch.dict(os.environ, settings), \
+             mock.patch.object(cli, "target_from_env", return_value=PROD), \
+             mock.patch.object(cli, "package", return_value=({}, "a" * 64)), \
+             mock.patch.object(cli, "read_private") as read_private, \
+             mock.patch.object(cli, "validate_evidence") as validate, \
+             mock.patch.object(cli, "CurlFTPS") as ftps:
+            cli.main(["preflight", "--environment", "production", "--release", cli.ONE_TIME_BYPASS_RELEASE])
+            read_private.assert_not_called()
+            validate.assert_not_called()
+            ftps.assert_not_called()
+            for changed in ({"V2_ONE_TIME_STAGING_RUN_ID": "123"},
+                            {"V2_ONE_TIME_BYPASS_APPROVAL": "wrong"}):
+                with mock.patch.dict(os.environ, changed):
+                    with self.assertRaisesRegex(ValueError, "does not match"):
+                        cli.main(["preflight", "--environment", "production", "--release", cli.ONE_TIME_BYPASS_RELEASE])
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                cli.main(["preflight", "--environment", "production", "--release", OLD])
+
     def run_seed(self, environment, *, activated="", approval=""):
         target = TARGET if environment == "staging" else PROD
         settings = {"V2_ACTIVATED": activated, "V2_SEED_APPROVAL": approval}
