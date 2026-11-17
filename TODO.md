@@ -42,6 +42,15 @@ _No website-only tasks recorded yet. Add them here as they arise._
 
 ## Shared / Infrastructure
 
+### Scheduled orders — post-launch
+
+- [ ] **Design scheduled collection and delivery orders after the current production release**
+  - Website: offer ASAP or a later date and time during checkout. Derive available slots from opening hours, preparation time, delivery availability and order cutoffs; validate the selected slot before payment.
+  - POS: show the requested fulfilment date and time, clearly distinguish scheduled orders, introduce them into the preparation queue at the appropriate time, and prevent premature ready or dispatched states.
+  - Customer communications: include the scheduled date and time in confirmation emails and order status screens.
+  - Handle UK daylight saving transitions explicitly, including ambiguous and nonexistent local times. Revalidate availability before accepting payment.
+  - Design the flow and review the existing order model before proposing any database changes. Implement and test on staging in both repositories after launch; keep this out of the current production release.
+
 ### Deployment safety and recovery
 
 - [ ] **Integrate version-tracked SQL migrations into the POS production release workflow**
