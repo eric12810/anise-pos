@@ -27,6 +27,15 @@ using (var model = new AniseDbContext(new DbContextOptionsBuilder<AniseDbContext
 }
 
 var day1 = new DateTimeOffset(2026, 11, 12, 0, 0, 0, TimeSpan.Zero);
+if (!CommerceEndpoints.ValidSavedCustomerAddress("Jane Smith", "07123456789", "NW1 8ET", "10 High Street", "Flat 2") ||
+    CommerceEndpoints.ValidSavedCustomerAddress("", "07123456789", "NW1 8ET", "10 High Street", null) ||
+    CommerceEndpoints.ValidSavedCustomerAddress("Jane Smith", "123", "NW1 8ET", "10 High Street", null) ||
+    CommerceEndpoints.ValidSavedCustomerAddress("Jane Smith", "07123abc789", "NW1 8ET", "10 High Street", null) ||
+    CommerceEndpoints.ValidSavedCustomerAddress("Jane Smith", "07123456789", "", "10 High Street", null) ||
+    CommerceEndpoints.ValidSavedCustomerAddress("Jane Smith", "07123456789", "NW1 8ET", "", null) ||
+    CommerceEndpoints.ValidSavedCustomerAddress(new string('A', 81), "07123456789", "NW1 8ET", "10 High Street", null))
+    throw new Exception("Saved customer address validation checks failed.");
+Console.WriteLine("Passed saved customer address validation checks.");
 var day2 = day1.AddDays(1);
 var confirmedPayment = ReportEndpoints.IsConfirmedPayment.Compile();
 if (confirmedPayment(new Payment { Status = PaymentStatus.Pending, PaidAtUtc = day1, Amount = 99m }) ||
