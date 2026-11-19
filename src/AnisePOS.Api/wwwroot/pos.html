@@ -156,7 +156,7 @@
       document.querySelectorAll('#types button').forEach(button=>button.classList.toggle('active',button.dataset.type==='Collection'));
       document.querySelectorAll('#payments button').forEach(button=>button.classList.toggle('active',button.dataset.payment==='Cash'));
       document.querySelector('#delivery-fields').hidden=true;
-      document.querySelector('#manual-postcode').value='';setPostcodeSearchValue('',false);invalidateDeliveryQuote();
+      manualPostcode.value='';setPostcodeSearchValue('',false);invalidateDeliveryQuote();
       const addresses=document.querySelector('#address-select');addresses.innerHTML='<option value="">Choose an address</option>';addresses._addresses=[];
       document.querySelector('#address-results').hidden=true;
       ['phone-lookup-status','address-lookup-status','places-status','delivery-fee-status','route-summary','copy-status','save-address-status'].forEach(id=>document.querySelector('#'+id).textContent='');
