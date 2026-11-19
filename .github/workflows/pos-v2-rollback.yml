@@ -1,0 +1,34 @@
+name: POS V2 Production Rollback
+on:
+  workflow_dispatch:
+    inputs:
+      failed_release: {description: 'Exact failed release commit SHA', required: true, type: string}
+      backup_run_id: {description: 'Production release run containing the verified pre-release archive', required: true, type: string}
+permissions: {contents: read, actions: read}
+concurrency: {group: anise-pos-production, cancel-in-progress: false}
+jobs:
+  rollback:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: false}
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: '${{ secrets.GITHUB_TOKEN }}'
+          run-id: '${{ inputs.backup_run_id }}'
+          name: pos-v2-production-before-${{ inputs.backup_run_id }}
+          path: recovery
+      - name: Restore exact last healthy application and verify health
+        run: python3 -m deployment.v2.cli rollback --environment production --release '${{ inputs.failed_release }}' --archive recovery/production-before.zip
+        env:
+          V2_ACTIVATED: '${{ vars.V2_ACTIVATED }}'
+          V2_ROLLBACK_APPROVAL: ROLLBACK POS PRODUCTION
+          V2_PRODUCTION_FTPS_HOST: '${{ secrets.LIVE_FTPS_HOST }}'
+          V2_PRODUCTION_FTPS_USER: liveposftp
+          V2_PRODUCTION_FTPS_PASSWORD: '${{ secrets.LIVE_FTPS_PASSWORD }}'
+          V2_PRODUCTION_FTPS_ROOT: /wwwroot
+          V2_PRODUCTION_SITE_URL: https://pos.loveanise.co.uk
+          V2_PRODUCTION_DATABASE: anisedatabase

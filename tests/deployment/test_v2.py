@@ -11,7 +11,7 @@ import unittest
 from unittest import mock
 from zipfile import ZipFile
 
-from deployment.v2 import cli, engine, model, preflight, transport, manual_sql, load_manual_snapshot
+from deployment.v2 import cli, engine, model, preflight, transport, manual_sql, load_manual_snapshot, schema_guard
 
 TARGET = model.Target("staging", "wsuk32.pronameserver.com", "stageposftp", "/stageposftp/wwwroot",
                       "https://pos-staging.loveanise.co.uk", "anisedb")
@@ -22,27 +22,14 @@ NEW = "b" * 40
 
 
 class CliSeedGuards(unittest.TestCase):
-    def test_one_time_preflight_bypass_is_limited_to_exact_run_and_release(self):
-        settings = {"V2_ONE_TIME_BYPASS_REQUESTED": "true",
-                    "V2_ONE_TIME_STAGING_RUN_ID": cli.ONE_TIME_BYPASS_RUN,
-                    "V2_ONE_TIME_BYPASS_APPROVAL": cli.ONE_TIME_BYPASS_PHRASE}
-        with mock.patch.dict(os.environ, settings), \
+    def test_retired_bypass_environment_does_not_skip_evidence(self):
+        with mock.patch.dict(os.environ, {"V2_ONE_TIME_BYPASS_REQUESTED": "true"}), \
              mock.patch.object(cli, "target_from_env", return_value=PROD), \
              mock.patch.object(cli, "package", return_value=({}, "a" * 64)), \
-             mock.patch.object(cli, "read_private") as read_private, \
-             mock.patch.object(cli, "validate_evidence") as validate, \
              mock.patch.object(cli, "CurlFTPS") as ftps:
-            cli.main(["preflight", "--environment", "production", "--release", cli.ONE_TIME_BYPASS_RELEASE])
-            read_private.assert_not_called()
-            validate.assert_not_called()
-            ftps.assert_not_called()
-            for changed in ({"V2_ONE_TIME_STAGING_RUN_ID": "123"},
-                            {"V2_ONE_TIME_BYPASS_APPROVAL": "wrong"}):
-                with mock.patch.dict(os.environ, changed):
-                    with self.assertRaisesRegex(ValueError, "does not match"):
-                        cli.main(["preflight", "--environment", "production", "--release", cli.ONE_TIME_BYPASS_RELEASE])
-            with self.assertRaisesRegex(ValueError, "does not match"):
+            with self.assertRaisesRegex(ValueError, "evidence is required"):
                 cli.main(["preflight", "--environment", "production", "--release", OLD])
+            ftps.assert_not_called()
 
     def run_seed(self, environment, *, activated="", approval=""):
         target = TARGET if environment == "staging" else PROD
@@ -166,8 +153,8 @@ class FakeFTP:
     def cwd(self, path):
         if path == self.target.root:
             self.path = path
-        elif path in self.dirs:
-            self.path = self.target.root + "/" + path
+        elif path in self.dirs or path.removeprefix(self.target.root + "/") in self.dirs:
+            self.path = self.target.root + "/" + path.removeprefix(self.target.root + "/")
         else:
             raise ValueError("Unknown directory")
 
@@ -198,6 +185,9 @@ class FakeFTP:
 
     def mkdir(self, name):
         self.dirs.add(name)
+
+    def timing_summary(self):
+        return "simulated FTPS timing"
 
 
 def artifact(tmp, dll=b"old"):
@@ -292,6 +282,47 @@ class V2Tests(unittest.TestCase):
                 engine.deploy(ftp, TARGET, replacement, NEW, health_check=lambda _: None, sleeper=lambda _: None)
         put.assert_not_called()
 
+    def test_verified_backup_reuses_download_and_rejects_pointer_change(self):
+        ftp = FakeFTP()
+        baseline(ftp, self.root)
+        archive = Path(self.temp.name) / "before.zip"
+        verified = engine.backup_current(ftp, TARGET, archive)
+        replacement = artifact(Path(self.temp.name) / "replacement", b"new")
+        with mock.patch.object(ftp, "get", wraps=ftp.get) as get:
+            engine.deploy(ftp, TARGET, replacement, NEW, verified_backup=verified,
+                          health_check=lambda _: None, sleeper=lambda _: None)
+        self.assertNotIn("wwwroot/pos.html", [call.args[0] for call in get.call_args_list])
+
+        other = FakeFTP()
+        baseline(other, self.root)
+        altered = dict(verified, previous_healthy=NEW)
+        other.files[engine.CURRENT] = json.dumps(altered).encode()
+        with self.assertRaises(RuntimeError):
+            engine.deploy(other, TARGET, replacement, NEW, verified_backup=verified,
+                          health_check=lambda _: None, sleeper=lambda _: None)
+        self.assertNotIn(engine.OFFLINE, other.files)
+
+    def test_cli_rejects_changed_archive_before_ftps_deploy(self):
+        ftp = FakeFTP(PROD)
+        baseline(ftp, self.root)
+        archive = Path(self.temp.name) / "before.zip"
+        receipt = Path(self.temp.name) / "receipt.json"
+        with mock.patch.dict(os.environ, {"V2_ACTIVATED": "yes"}), \
+             mock.patch.object(cli, "target_from_env", return_value=PROD), \
+             mock.patch.object(cli, "CurlFTPS", return_value=ftp), \
+             mock.patch.object(cli, "validate_evidence"), \
+             mock.patch.object(cli, "read_private", return_value=b'{"sql_mode":"manual"}'):
+            cli.main(["backup", "--environment", "production", "--artifact", str(self.root),
+                      "--evidence", __file__, "--sql-mode", "manual", "--release", NEW,
+                      "--archive", str(archive), "--backup-receipt", str(receipt)])
+            archive.write_bytes(archive.read_bytes() + b"changed")
+            with mock.patch.object(cli, "deploy") as deploy:
+                with self.assertRaisesRegex(ValueError, "archive changed"):
+                    cli.main(["deploy", "--environment", "production", "--artifact", str(self.root),
+                              "--evidence", __file__, "--sql-mode", "manual", "--release", NEW,
+                              "--archive", str(archive), "--backup-receipt", str(receipt)])
+                deploy.assert_not_called()
+
     def test_disposable_staging_ftps_probe_cleans_up(self):
         ftp = FakeFTP()
         result = engine.disposable_ftps_probe(ftp, TARGET)
@@ -304,10 +335,11 @@ class V2Tests(unittest.TestCase):
         ftp = FakeFTP()
         baseline(ftp, self.root)
         archive = Path(self.temp.name) / "backup.zip"
-        engine.backup_current(ftp, TARGET, archive)
+        verified = engine.backup_current(ftp, TARGET, archive)
         new = artifact(Path(self.temp.name) / "new", b"new")
         with self.assertRaises(RuntimeError):
-            engine.deploy(ftp, TARGET, new, NEW, health_check=lambda _: (_ for _ in ()).throw(RuntimeError("500.30")), sleeper=lambda _: None)
+            engine.deploy(ftp, TARGET, new, NEW, verified_backup=verified,
+                          health_check=lambda _: (_ for _ in ()).throw(RuntimeError("500.30")), sleeper=lambda _: None)
         self.assertIn(engine.OFFLINE, ftp.files)
         self.assertEqual(model.parse_state(ftp.files[engine.HEALTHY], TARGET)["release"], OLD)
         self.assertEqual(model.parse_state(ftp.files[engine.record_name(NEW)], TARGET)["history"],
@@ -537,11 +569,24 @@ class V2Tests(unittest.TestCase):
             with self.assertRaises((ValueError, KeyError), msg=field):
                 manual_sql.validate(raw, model_raw, review | {field: bad}, digest, NEW, now=now)
 
-    def test_production_template_does_not_receive_sql_credentials(self):
+    def test_routine_production_workflow_has_no_preflight_secret(self):
         workflow = Path("deployment/v2/workflows/pos-v2-production.yml").read_text()
-        self.assertIn("sql_mode", workflow)
-        self.assertIn("V2_SQL_CONNECTION", workflow)
-        self.assertIn("manual", workflow)
+        self.assertNotIn("sql_mode", workflow)
+        self.assertNotIn("V2_SQL_CONNECTION", workflow)
+        self.assertNotIn("PREFLIGHT_EVIDENCE", workflow)
+        self.assertIn("schema_guard", workflow)
+
+    def test_schema_guard_blocks_runtime_database_changes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            current, candidate = Path(folder) / "current", Path(folder) / "candidate"
+            for root in (current, candidate):
+                (root / "src/AnisePOS.Api/Data").mkdir(parents=True)
+                (root / "src/AnisePOS.Api/Program.cs").write_text("startup")
+                (root / "src/AnisePOS.Api/Data/AniseDbContext.cs").write_text("mapping")
+            self.assertTrue(schema_guard.check(current, candidate))
+            (candidate / "src/AnisePOS.Api/Program.cs").write_text("ALTER TABLE")
+            with self.assertRaisesRegex(ValueError, "Database requirements changed"):
+                schema_guard.check(current, candidate)
 
     def test_protected_manual_snapshot_expansion_is_bounded_and_private(self):
         raw = b'{"database":"anisedatabase","columns":[]}'

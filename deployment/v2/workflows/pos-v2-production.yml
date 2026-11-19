@@ -3,9 +3,6 @@ on:
   workflow_dispatch:
     inputs:
       staging_run_id: {description: 'Verified V2 staging run ID', required: true, type: string}
-      sql_mode: {description: 'Production SQL verification path', required: true, type: choice, options: [manual, automated]}
-      first_release: {description: 'First V2 release from verified legacy application backup', required: true, type: boolean, default: false}
-      first_release_approval: {description: 'Exact first-release approval phrase when selected', required: false, type: string}
 permissions: {contents: read, actions: read}
 concurrency: {group: anise-pos-production, cancel-in-progress: false}
 jobs:
@@ -29,49 +26,14 @@ jobs:
           run-id: '${{ inputs.staging_run_id }}'
           name: '${{ steps.resolve.outputs.artifact_name }}'
           path: artifacts/staging
-      - name: Load protected Winserve, SQL, runtime and backup evidence
-        run: python3 -c 'import os,pathlib; os.umask(0o077); pathlib.Path("preflight.json").write_text(os.environ["V2_PRODUCTION_PREFLIGHT_EVIDENCE"])'
-        env:
-          V2_PRODUCTION_PREFLIGHT_EVIDENCE: '${{ secrets.V2_PRODUCTION_PREFLIGHT_EVIDENCE }}'
-      - name: Load private manual SQL metadata snapshot
-        if: inputs.sql_mode == 'manual'
-        run: python3 -m deployment.v2.load_manual_snapshot
-        env:
-          V2_PRODUCTION_SQL_SNAPSHOT_ZLIB_B64: '${{ secrets.V2_PRODUCTION_SQL_SNAPSHOT_ZLIB_B64 }}'
       - uses: actions/checkout@v4
         with:
           ref: '${{ steps.resolve.outputs.release }}'
           path: release-source
           persist-credentials: false
-      - uses: actions/setup-dotnet@v4
-        with: {dotnet-version: '9.0.x'}
-      - name: Use preflight helper with exact release source
-        run: cp deployment/v2/DbProbe/Program.cs release-source/deployment/v2/DbProbe/Program.cs
-      - name: Generate EF schema from exact release source
-        if: inputs.sql_mode == 'manual'
-        run: |
-          umask 077
-          dotnet run --project release-source/deployment/v2/DbProbe/DbProbe.csproj -- --schema-json expected-schema.json
-          chmod 600 expected-schema.json
-      - name: Run protected automated read-only SQL probe
-        if: inputs.sql_mode == 'automated'
-        run: |
-          umask 077
-          dotnet run --project release-source/deployment/v2/DbProbe/DbProbe.csproj -- --output db-probe.json
-          chmod 600 db-probe.json
-        env:
-          V2_SQL_CONNECTION: '${{ secrets.V2_PRODUCTION_READONLY_SQL_CONNECTION }}'
-      - name: Verify exact artifact and selected SQL evidence
-        run: python3 -m deployment.v2.cli preflight --environment production --evidence preflight.json --release '${{ steps.resolve.outputs.release }}' --sql-mode '${{ inputs.sql_mode }}'
-        env: &production_identity
-          V2_PRODUCTION_FTPS_HOST: '${{ secrets.LIVE_FTPS_HOST }}'
-          V2_PRODUCTION_FTPS_USER: liveposftp
-          V2_PRODUCTION_FTPS_ROOT: /wwwroot
-          V2_PRODUCTION_SITE_URL: https://pos.loveanise.co.uk
-          V2_PRODUCTION_DATABASE: anisedatabase
       - name: Verify current managed files and retain pre-release archive
-        if: ${{ !inputs.first_release }}
-        run: python3 -m deployment.v2.cli backup --environment production --evidence preflight.json --archive production-before.zip --release '${{ steps.resolve.outputs.release }}' --sql-mode '${{ inputs.sql_mode }}'
+        id: backup
+        run: python3 -m deployment.v2.cli backup --environment production --archive production-before.zip --backup-receipt production-before-receipt.json
         env: &production_env
           V2_ACTIVATED: '${{ vars.V2_ACTIVATED }}'
           V2_PRODUCTION_FTPS_HOST: '${{ secrets.LIVE_FTPS_HOST }}'
@@ -80,11 +42,13 @@ jobs:
           V2_PRODUCTION_FTPS_ROOT: /wwwroot
           V2_PRODUCTION_SITE_URL: https://pos.loveanise.co.uk
           V2_PRODUCTION_DATABASE: anisedatabase
-          V2_INITIAL_RELEASE_APPROVAL: '${{ inputs.first_release_approval }}'
-      - name: Verify and archive existing legacy application without asserting health
-        if: ${{ inputs.first_release }}
-        run: python3 -m deployment.v2.cli initial-backup --environment production --evidence preflight.json --archive production-before.zip --release '${{ steps.resolve.outputs.release }}' --sql-mode '${{ inputs.sql_mode }}'
-        env: *production_env
+      - uses: actions/checkout@v4
+        with:
+          ref: '${{ steps.backup.outputs.current_release }}'
+          path: current-source
+          persist-credentials: false
+      - name: Refuse routine release if database requirements changed
+        run: python3 -m deployment.v2.schema_guard current-source release-source
       - uses: actions/upload-artifact@v4
         with:
           name: pos-v2-production-before-${{ github.run_id }}
@@ -92,10 +56,18 @@ jobs:
           if-no-files-found: error
           retention-days: 90
       - name: Install exact staging artifact and verify health
-        if: ${{ !inputs.first_release }}
-        run: python3 -m deployment.v2.cli deploy --environment production --evidence preflight.json --release '${{ steps.resolve.outputs.release }}' --sql-mode '${{ inputs.sql_mode }}'
+        id: install
+        run: python3 -m deployment.v2.cli deploy --environment production --release '${{ steps.resolve.outputs.release }}' --archive production-before.zip --backup-receipt production-before-receipt.json
         env: *production_env
-      - name: Install first V2 release and establish healthy baseline only after health verification
-        if: ${{ inputs.first_release }}
-        run: python3 -m deployment.v2.cli initial-deploy --environment production --evidence preflight.json --archive production-before.zip --release '${{ steps.resolve.outputs.release }}' --sql-mode '${{ inputs.sql_mode }}'
-        env: *production_env
+      - name: Attempt application rollback after failed activation
+        if: failure() && steps.install.outcome == 'failure'
+        run: python3 -m deployment.v2.cli rollback --environment production --release '${{ steps.resolve.outputs.release }}' --archive production-before.zip
+        env:
+          V2_ACTIVATED: '${{ vars.V2_ACTIVATED }}'
+          V2_PRODUCTION_FTPS_HOST: '${{ secrets.LIVE_FTPS_HOST }}'
+          V2_PRODUCTION_FTPS_USER: liveposftp
+          V2_PRODUCTION_FTPS_PASSWORD: '${{ secrets.LIVE_FTPS_PASSWORD }}'
+          V2_PRODUCTION_FTPS_ROOT: /wwwroot
+          V2_PRODUCTION_SITE_URL: https://pos.loveanise.co.uk
+          V2_PRODUCTION_DATABASE: anisedatabase
+          V2_ROLLBACK_APPROVAL: ROLLBACK POS PRODUCTION
