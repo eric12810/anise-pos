@@ -83,12 +83,18 @@ def directory_for(ftp, target, name):
         ftp.cwd(part)
 
 
-def install_files(ftp, target, root, files, verified_existing=None):
+def install_files(ftp, target, root, files, verified_existing=None, known_dirs=None):
     for name, digest in sorted(files.items()):
         # The caller has already downloaded and hashed every managed live file.
         if verified_existing is not None and verified_existing.get(name) == digest:
             continue
-        directory_for(ftp, target, name)
+        parent = PurePosixPath(name).parent
+        if known_dirs is not None and str(parent) in known_dirs:
+            ftp.cwd(str(PurePosixPath(target.root) / parent))
+        else:
+            directory_for(ftp, target, name)
+            if known_dirs is not None:
+                known_dirs.add(str(parent))
         data = (Path(root) / name).read_bytes()
         if sha256(data).hexdigest() != digest:
             raise ValueError("Local artifact changed during deployment")
@@ -221,6 +227,94 @@ def deploy(ftp, target, root, release, *, health_check=health, sleeper=time.slee
         except Exception:
             pass
         raise
+
+
+def staging_deploy(ftp, target, root, release, *, health_check=health, sleeper=time.sleep):
+    """Fast staging install using the healthy manifest as the unchanged-file baseline."""
+    if target.name != "staging":
+        raise ValueError("Fast deployment is staging-only")
+    files, artifact = package(root)
+    current = inspect(ftp, target)
+    if current["release"] == release and current["artifact"] == artifact and current["files"] == files:
+        health_check(target.url)
+        return "already healthy"
+    if record_name(release) in ftp.list():
+        raise RuntimeError("Release ID already has history; refusing replay")
+    if set(current["files"]) - set(files):
+        raise RuntimeError("Artifact removes managed files; explicit compatibility review required")
+    changed = {name: digest for name, digest in files.items() if current["files"].get(name) != digest}
+    print(f"STAGING: {len(files)} managed, {len(changed)} changed, {len(files)-len(changed)} unchanged", flush=True)
+    marker = b"<html><body>POS deployment in progress</body></html>\n"
+    transitions = []
+    verified_put(ftp, OFFLINE, marker)
+    try:
+        sleeper(15)
+        known_dirs = {str(PurePosixPath(name).parent) for name in current["files"]}
+        install_files(ftp, target, root, changed, known_dirs=known_dirs)
+        uploaded = state_bytes(target, release, artifact, "uploaded", files, current["release"])
+        transitions.append("uploaded")
+        publish_state(ftp, target, record_name(release), uploaded)
+        installed = state_bytes(target, release, artifact, "installed", files, current["release"], transitions + ["installed"])
+        transitions.append("installed")
+        publish_state(ftp, target, record_name(release), installed)
+        ftp.delete(OFFLINE)
+        health_started = time.monotonic()
+        try:
+            health_check(target.url)
+        finally:
+            print(f"STAGING health: {time.monotonic() - health_started:.1f}s", flush=True)
+        healthy = state_bytes(target, release, artifact, "healthy", files, current["release"], transitions + ["healthy"])
+        publish_state(ftp, target, record_name(release), healthy)
+        publish_state(ftp, target, HEALTHY, healthy)
+        publish_state(ftp, target, CURRENT, healthy)
+        return "verified healthy"
+    except Exception:
+        try:
+            ftp.cwd(target.root)
+            if OFFLINE not in ftp.list():
+                verified_put(ftp, OFFLINE, marker)
+            failed = state_bytes(target, release, artifact, "failed", files, current["release"], transitions + ["failed"])
+            publish_state(ftp, target, record_name(release), failed)
+        except Exception:
+            pass
+        raise
+
+
+def staging_recover(ftp, target, root, expected_failed_release, *, health_check=health, sleeper=time.sleep):
+    """Restore the last healthy staging artifact without a per-deploy remote archive."""
+    if target.name != "staging":
+        raise ValueError("Artifact recovery is staging-only")
+    files, artifact = package(root)
+    ftp.cwd(target.root)
+    names = set(ftp.list())
+    if OFFLINE not in names or record_name(expected_failed_release) not in names:
+        raise RuntimeError("Expected failed release and maintenance marker are absent")
+    failed = read_state(ftp, target, record_name(expected_failed_release))
+    healthy_state = read_state(ftp, target, HEALTHY)
+    current = read_state(ftp, target, CURRENT)
+    if (failed["release"] != expected_failed_release or failed["phase"] != "failed"
+            or current != healthy_state or failed["previous_healthy"] != healthy_state["release"]
+            or healthy_state["artifact"] != artifact or healthy_state["files"] != files):
+        raise RuntimeError("Recovery artifact differs from the last verified healthy release")
+    added = sorted(set(failed["files"]) - set(files))
+    for name in added:
+        if sha256(ftp.get(name)).hexdigest() != failed["files"][name]:
+            raise RuntimeError("Failed-release-only file changed; recovery refused: " + name)
+    sleeper(15)
+    install_files(ftp, target, root, files)
+    for name in added:
+        directory_for(ftp, target, name)
+        ftp.delete(PurePosixPath(name).name)
+    ftp.cwd(target.root)
+    ftp.delete(OFFLINE)
+    try:
+        health_check(target.url)
+    except Exception:
+        verified_put(ftp, OFFLINE, b"<html><body>POS recovery review required</body></html>\n")
+        raise
+    publish_state(ftp, target, CURRENT, state_bytes(target, healthy_state["release"], healthy_state["artifact"],
+                                              "healthy", files, healthy_state["previous_healthy"], healthy_state["history"]))
+    return "verified healthy after staging recovery"
 
 
 def rollback(ftp, target, archive, expected_failed_release, *, health_check=health, sleeper=time.sleep):

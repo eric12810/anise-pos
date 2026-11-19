@@ -64,6 +64,14 @@ class CliSeedGuards(unittest.TestCase):
                 cli.main(["deploy", "--environment", "staging", "--release", OLD])
             ftps.assert_not_called()
 
+    def test_fast_commands_reject_production_before_ftps(self):
+        for command in ("staging-deploy", "staging-recover"):
+            with self.subTest(command=command), mock.patch.object(cli, "target_from_env", return_value=PROD), \
+                 mock.patch.object(cli, "CurlFTPS") as ftps:
+                with self.assertRaisesRegex(ValueError, "staging target"):
+                    cli.main([command, "--environment", "production", "--release", OLD])
+                ftps.assert_not_called()
+
     def test_production_rollback_still_requires_activation(self):
         with mock.patch.dict(os.environ, {"V2_ACTIVATED": "", "V2_ROLLBACK_APPROVAL": "ROLLBACK POS PRODUCTION"}), \
              mock.patch.object(cli, "target_from_env", return_value=PROD), \
@@ -209,6 +217,33 @@ class V2Tests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "changed since healthy baseline"):
                 engine.deploy(ftp, TARGET, replacement, NEW, health_check=lambda _: None, sleeper=lambda _: None)
         put.assert_not_called()
+
+    def test_staging_deploy_reads_no_unchanged_application_files(self):
+        ftp = FakeFTP()
+        baseline(ftp, self.root)
+        replacement = artifact(Path(self.temp.name) / "replacement", b"new")
+        with mock.patch.object(ftp, "get", wraps=ftp.get) as get:
+            engine.staging_deploy(ftp, TARGET, replacement, NEW, health_check=lambda _: None, sleeper=lambda _: None)
+        downloaded = [call.args[0] for call in get.call_args_list]
+        self.assertNotIn("wwwroot/pos.html", downloaded)
+        self.assertEqual(ftp.files["AnisePOS.Api.dll"], b"new")
+        self.assertEqual(ftp.files["wwwroot/pos.html"], b"pos")
+
+    def test_staging_recovery_uses_exact_last_healthy_artifact(self):
+        ftp = FakeFTP()
+        baseline(ftp, self.root)
+        replacement = artifact(Path(self.temp.name) / "replacement", b"new")
+        with self.assertRaises(RuntimeError):
+            engine.staging_deploy(ftp, TARGET, replacement, NEW,
+                                  health_check=lambda _: (_ for _ in ()).throw(RuntimeError("500.30")), sleeper=lambda _: None)
+        with self.assertRaisesRegex(RuntimeError, "Recovery artifact differs"):
+            engine.staging_recover(ftp, TARGET, replacement, NEW, health_check=lambda _: None, sleeper=lambda _: None)
+        self.assertEqual(engine.staging_recover(ftp, TARGET, self.root, NEW,
+                                                health_check=lambda _: None, sleeper=lambda _: None),
+                         "verified healthy after staging recovery")
+        self.assertNotIn(engine.OFFLINE, ftp.files)
+        self.assertEqual(ftp.files["AnisePOS.Api.dll"], b"old")
+        self.assertEqual(model.parse_state(ftp.files[engine.CURRENT], TARGET)["release"], OLD)
 
     def test_disposable_staging_ftps_probe_cleans_up(self):
         ftp = FakeFTP()

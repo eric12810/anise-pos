@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import sys
 
-from .engine import backup_current, deploy, rollback, seed, disposable_ftps_probe
+from .engine import backup_current, deploy, rollback, seed, disposable_ftps_probe, staging_deploy, staging_recover
 from .model import Target, package
 from .preflight import validate_evidence
 from .transport import CurlFTPS
@@ -19,7 +19,7 @@ def target_from_env(name):
 
 def main(argv=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("package", "preflight", "backup", "deploy", "rollback", "seed", "ftps-probe"))
+    parser.add_argument("command", choices=("package", "preflight", "backup", "deploy", "staging-deploy", "staging-recover", "rollback", "seed", "ftps-probe"))
     parser.add_argument("--environment", choices=("staging", "production"), required=True)
     parser.add_argument("--artifact", default="artifacts/staging")
     parser.add_argument("--release", default="")
@@ -43,6 +43,8 @@ def main(argv=None):
         ftp = CurlFTPS(target, os.environ.get("V2_STAGING_FTPS_PASSWORD", ""))
         print(disposable_ftps_probe(ftp, target))
         return
+    if args.command in {"staging-deploy", "staging-recover"} and args.environment != "staging":
+        raise ValueError("Staging operation requires staging target")
     files, digest = package(args.artifact)
     if args.command == "package":
         print("Validated package:", len(files), "files; manifest SHA-256", digest)
@@ -72,6 +74,20 @@ def main(argv=None):
         if len(args.release) != 40:
             raise ValueError("Exact commit SHA required")
         print(deploy(ftp, target, args.artifact, args.release))
+    elif args.command == "staging-deploy":
+        if len(args.release) != 40:
+            raise ValueError("Exact commit SHA required")
+        try:
+            print(staging_deploy(ftp, target, args.artifact, args.release))
+        finally:
+            print(ftp.timing_summary(), flush=True)
+    elif args.command == "staging-recover":
+        if len(args.release) != 40 or os.environ.get("V2_STAGING_RECOVERY_APPROVAL") != "RECOVER POS STAGING":
+            raise ValueError("Exact failed release and staging recovery approval required")
+        try:
+            print(staging_recover(ftp, target, args.artifact, args.release))
+        finally:
+            print(ftp.timing_summary(), flush=True)
     elif args.command == "seed":
         print(seed(ftp, target, args.artifact, args.release))
 

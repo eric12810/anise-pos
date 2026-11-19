@@ -160,3 +160,34 @@ The V2 transport probe is `python3 -m deployment.v2.cli ftps-probe --environment
 with the protected staging FTPS environment and `V2_FTPS_PROBE_APPROVAL=PROBE STAGING FTPS`.
 It writes, verifies, renames and deletes one random disposable staging file.
 It was not run against Winserve in this development branch.
+
+## Fast staging deployment and recovery
+
+The active staging workflow uses `staging-deploy`. It compares the new artifact
+with the last healthy V2 manifest, uploads only changed managed files, and
+downloads each upload for verification. It does not download every unchanged
+remote file or create a full application archive on each run. The healthy
+manifest is therefore the baseline for unchanged files; out-of-band edits to
+those files are detected by application health or a separate full verification,
+not by the routine deployment. The production `deploy`, `backup`, and `rollback`
+paths retain their original full verification and backup behavior.
+
+After an interrupted or unhealthy staging deployment, choose **recover** in the
+POS V2 Staging Deploy workflow. Supply the successful V2 staging run ID for the
+last healthy release and the failed release's full commit SHA. The workflow
+resolves that run, downloads its exact retained artifact, checks it against the
+remote healthy manifest, restores managed application files, removes only
+verified failed-release additions, and requires healthy `/health` before
+restoring the current pointer. Hosted configuration, runtime data and SQL are
+untouched. The workflow will refuse recovery if the artifact has expired or
+does not match the last healthy state. GitHub retains these artifacts for 90
+days; export an exact healthy artifact to a protected location before that
+window expires if staging remains unchanged that long. Previous staging
+pre-deploy archives remain available for their original retention period.
+
+The fast deploy prints managed/changed/unchanged file counts and aggregate FTPS
+call counts and elapsed time for listings, downloads, uploads and commands.
+These timings include curl process startup and network time. Health polling is
+separate; measure the Actions step duration against the FTPS totals to identify
+IIS startup and health delay. No live staging deployment was performed while
+preparing this change.
