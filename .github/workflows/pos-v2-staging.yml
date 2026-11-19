@@ -21,6 +21,7 @@ jobs:
       - run: dotnet restore AnisePOS.sln
       - run: dotnet build AnisePOS.sln --configuration Release --no-restore
       - run: dotnet run --project tests/AnisePOS.Checks --configuration Release --no-build
+      - run: node --test tests/draft-print.test.mjs
       - run: python3 -m unittest discover -s tests/deployment -v
       - run: python3 scripts/check-migrations.py
       - run: dotnet publish src/AnisePOS.Api/AnisePOS.Api.csproj --configuration Release --no-restore --no-self-contained -p:UseAppHost=false --output artifacts/staging
