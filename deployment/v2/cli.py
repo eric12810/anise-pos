@@ -1,22 +1,17 @@
 """V2 command line entry point; no deployment workflow invokes it until activation."""
 import argparse
+from hashlib import sha256
 import json
 import os
 import stat
 from pathlib import Path
 import sys
+import zipfile
 
 from .engine import backup_current, backup_legacy, deploy, deploy_initial, rollback, seed, disposable_ftps_probe
-from .model import Target, package
+from .model import Target, package, parse_state
 from .preflight import validate_evidence
 from .transport import CurlFTPS
-
-# Temporary exception for the staging release selected in production run 44098648326.
-# Remove after this release. The package, backup and post-install health gates remain.
-ONE_TIME_BYPASS_RUN = "44094631832"
-ONE_TIME_BYPASS_RELEASE = "45171e888f02ea082a9a567f453307ccbb3a9105"
-ONE_TIME_BYPASS_PHRASE = "BYPASS PREFLIGHT FOR 45171e888f02ea082a9a567f453307ccbb3a9105"
-
 
 def target_from_env(name):
     prefix = "V2_" + name.upper() + "_"
@@ -45,6 +40,7 @@ def main(argv=None):
     parser.add_argument("--artifact", default="artifacts/staging")
     parser.add_argument("--release", default="")
     parser.add_argument("--archive", default="")
+    parser.add_argument("--backup-receipt", default="")
     parser.add_argument("--evidence", default="")
     parser.add_argument("--sql-snapshot", default="")
     parser.add_argument("--expected-schema", default="")
@@ -71,14 +67,7 @@ def main(argv=None):
     if args.command == "package":
         print("Validated package:", len(files), "files; manifest SHA-256", digest)
         return
-    bypass_requested = os.environ.get("V2_ONE_TIME_BYPASS_REQUESTED") == "true"
-    if bypass_requested:
-        if (args.command not in ("preflight", "backup", "deploy", "initial-backup", "initial-deploy")
-                or args.environment != "production" or args.release != ONE_TIME_BYPASS_RELEASE
-                or os.environ.get("V2_ONE_TIME_STAGING_RUN_ID") != ONE_TIME_BYPASS_RUN
-                or os.environ.get("V2_ONE_TIME_BYPASS_APPROVAL") != ONE_TIME_BYPASS_PHRASE):
-            raise ValueError("One-time preflight bypass does not match the approved release")
-    elif args.environment == "production":
+    if args.environment == "production" and args.command not in ("backup", "deploy"):
         if not args.evidence:
             raise ValueError("Protected production preflight evidence is required")
         evidence_raw = read_private(args.evidence).decode("utf-8")
@@ -93,8 +82,7 @@ def main(argv=None):
                           expected_schema=read_private(schema_path) if mode == "manual" else None,
                           db_probe=read_private(probe_path).decode("utf-8") if mode == "automated" else None)
     if args.command == "preflight":
-        print("Exact artifact validated; one-time preflight bypass active" if bypass_requested
-              else "Protected preflight evidence validated for exact artifact")
+        print("Protected preflight evidence validated for exact artifact")
         return
     staging_seed = args.command == "seed" and args.environment == "staging"
     if not staging_seed and os.environ.get("V2_ACTIVATED") != "yes":
@@ -111,12 +99,42 @@ def main(argv=None):
     if args.command == "backup":
         if not args.archive:
             raise ValueError("Backup archive path required")
-        state = backup_current(ftp, target, args.archive)
+        try:
+            state = backup_current(ftp, target, args.archive)
+        finally:
+            print(ftp.timing_summary(), flush=True)
+        if args.backup_receipt:
+            Path(args.backup_receipt).write_text(json.dumps({
+                "archive_sha256": sha256(Path(args.archive).read_bytes()).hexdigest(),
+                "release": state["release"], "artifact": state["artifact"]}) + "\n")
+        if os.environ.get("GITHUB_OUTPUT"):
+            with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+                output.write("current_release=" + state["release"] + "\n")
         print("Verified application archive for healthy release", state["release"])
     elif args.command == "deploy":
         if len(args.release) != 40:
             raise ValueError("Exact commit SHA required")
-        print(deploy(ftp, target, args.artifact, args.release))
+        verified_backup = None
+        if args.backup_receipt:
+            if not args.archive:
+                raise ValueError("Backup archive required with verification receipt")
+            receipt = json.loads(Path(args.backup_receipt).read_text())
+            if sha256(Path(args.archive).read_bytes()).hexdigest() != receipt["archive_sha256"]:
+                raise ValueError("Pre-release archive changed since verification")
+            with zipfile.ZipFile(args.archive) as source:
+                verified_backup = parse_state(source.read("release-state.json"), target)
+                if (receipt["release"] != verified_backup["release"]
+                        or receipt["artifact"] != verified_backup["artifact"]
+                        or set(source.namelist()) != {"release-state.json"} | {
+                            "files/" + name for name in verified_backup["files"]}):
+                    raise ValueError("Pre-release archive differs from verification receipt")
+                for name, expected in verified_backup["files"].items():
+                    if sha256(source.read("files/" + name)).hexdigest() != expected:
+                        raise ValueError("Pre-release archive file checksum mismatch")
+        try:
+            print(deploy(ftp, target, args.artifact, args.release, verified_backup=verified_backup))
+        finally:
+            print(ftp.timing_summary(), flush=True)
     elif args.command == "seed":
         print(seed(ftp, target, args.artifact, args.release))
     elif args.command == "initial-backup":

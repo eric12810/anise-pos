@@ -1,10 +1,56 @@
 # POS Deployment V2 — design and activation record
 
-V2 is implemented **alongside** the current deployment system. The three YAML files in
-`deployment/v2/workflows/` are templates, not active GitHub Actions workflows. Nothing
-in this directory has deployed to either Winserve site or connected to either SQL
-database. Production currently returns HTTP 500.30 for the newest application; V2
-does not diagnose or fix that startup exception.
+## Production routine review — 19 November 2026
+
+The successful production run on 17 November (Actions run 44104854064) took
+12m55s. Its application backup step ran for 4m55s and install/health step for
+7m32s. The old logs have no internal FTPS or health counters, so the precise
+transfer and startup portions cannot be measured retrospectively. The backup
+downloads and verifies every managed file; install then downloads and hashes
+the same current files again. Both issue separate curl FTPS calls per file.
+
+The routine workflow now asks only for a successful V2 staging run ID.
+Protected `production` environment approval remains the
+release gate. The first-release and one-time bypass inputs were removed after
+the successful V2 release; their historical code and recovery records remain
+available for incident review. The bypass itself was removed from the CLI.
+
+The backup still reads and hashes every production managed file, checks the
+complete archive, and uploads it before activation. It writes a local receipt
+with the archive checksum and healthy release identity. Deploy verifies that
+archive and receipt, checks the live healthy pointers, and then uploads only
+changed files; it does not download all unchanged files a second time. An
+upload is read back and hashed. Production now prints FTPS call counts and
+elapsed time by operation, application backup elapsed time, and health time.
+Saving one remote verification pass may save several minutes, but the 3–6
+minute target remains unmeasured until a separately approved production run.
+
+After a failed install, the release workflow attempts application rollback
+from its verified pre-release archive. Rollback restores managed files only,
+checks failed-release additions before removing them, and requires application
+and database health before clearing maintenance. If FTPS or release state
+prevents safe automatic recovery, the release remains failed for protected
+manual rollback. Neither path modifies SQL or hosted configuration.
+
+| Check | Frequency |
+| --- | --- |
+| Exact successful staging artifact, production approval, fixed production target, unchanged schema-sensitive source, verified application archive, health | Every routine release |
+| Full schema compatibility review against the changed EF model, migrations and startup SQL | Whenever schema requirements change; previous evidence cannot be reused |
+| Database backup, migration plan, staging rehearsal and separate approval | Database migration only |
+| Runtime/logging, environment protection, backup restoration and remote drift audit | Periodic infrastructure review |
+| Legacy backup and first-release activation | Historical one-time procedure, removed from routine interface |
+
+The routine preflight evidence, manual SQL snapshot and live SQL probe were
+removed from application-only releases. A source comparison against the
+currently healthy production release blocks changes to `Program.cs`, EF data
+and domain mappings, and checked-in SQL scripts. Such changes require a
+separately approved schema release with fresh database verification; this
+workflow cannot waive the block. The Actions application archive expires after 90 days; its
+protected durable retrieval path still needs a rehearsal. Legacy incident
+workflows and artifacts are retained until V2 rollback is rehearsed live.
+
+The sections below retain the original V2 design and activation history.
+The active production workflow is `.github/workflows/pos-v2-production.yml`.
 
 ## Assessment of the current system
 
@@ -47,8 +93,8 @@ tested and explicitly accepted.
    and two distinct retained/restorable application and SQL backups. The engine
    verifies and archives all current managed files before uploading. No SQL is
    changed. No release is called healthy before the retried health response.
-   For the **first** V2 production release only, select `first_release` and
-   supply the exact `APPROVE FIRST POS V2 PRODUCTION RELEASE` phrase. The same
+   Historically, the **first** V2 production release selected `first_release` and
+   supplied the exact `APPROVE FIRST POS V2 PRODUCTION RELEASE` phrase. The same
    protected workflow verifies the existing legacy production manifest and
    every listed live file, retains a checksum-verified archive before upload,
    and rechecks the live bytes against that archive immediately before install.

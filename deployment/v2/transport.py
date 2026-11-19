@@ -2,6 +2,7 @@
 from pathlib import PurePosixPath
 import subprocess
 import tempfile
+import time
 from urllib.parse import quote
 
 
@@ -12,6 +13,7 @@ class CurlFTPS:
             raise ValueError("Missing or invalid FTPS credential")
         self.target, self.password = target, password
         self.path = target.root
+        self.stats = {kind: [0, 0.0] for kind in ("list", "download", "upload", "command")}
 
     def _path(self, name=""):
         path = PurePosixPath(name) if name.startswith("/") else PurePosixPath(self.path) / name
@@ -37,11 +39,21 @@ class CurlFTPS:
             args.append("--list-only")
         if upload is not None:
             args += ["--upload-file", upload]
-        result = subprocess.run(args + [url], input=('user = "' + credential + '"\n').encode(), capture_output=True)
+        kind = "upload" if upload is not None else "command" if commands else "list" if listing else "download"
+        started = time.monotonic()
+        try:
+            result = subprocess.run(args + [url], input=('user = "' + credential + '"\n').encode(), capture_output=True)
+        finally:
+            self.stats[kind][0] += 1
+            self.stats[kind][1] += time.monotonic() - started
         if result.returncode:
             # curl/server output can contain hosting details or credentials.
             raise RuntimeError("FTPS operation failed (curl exit " + str(result.returncode) + ")")
         return result.stdout
+
+    def timing_summary(self):
+        return "FTPS: " + ", ".join(f"{kind}={count} calls/{seconds:.1f}s"
+                                     for kind, (count, seconds) in self.stats.items())
 
     def cwd(self, path):
         self.path = self._path(path)
