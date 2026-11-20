@@ -343,7 +343,7 @@ if (innerBand?.Fee != 2m || innerBand.RequiresApproval || outerBand?.Fee != 4m |
 Console.WriteLine("Passed delivery radius bands, validation and sector interaction checks.");
 if (!CommerceEndpoints.ValidPosEstimate(OrderType.Collection, null) || !CommerceEndpoints.ValidPosEstimate(OrderType.Collection, 10) ||
     !CommerceEndpoints.ValidPosEstimate(OrderType.Delivery, 30) || CommerceEndpoints.ValidPosEstimate(OrderType.Collection, 11) ||
-    CommerceEndpoints.ValidPosEstimate(OrderType.Delivery, 15) || CommerceEndpoints.ValidPosEstimate(OrderType.Collection, 0) ||
+    !CommerceEndpoints.ValidPosEstimate(OrderType.Delivery, 15) || CommerceEndpoints.ValidPosEstimate(OrderType.Delivery, 16) || CommerceEndpoints.ValidPosEstimate(OrderType.Collection, 0) ||
     CommerceEndpoints.ValidPosEstimate(OrderType.Delivery, 1450)) throw new Exception("POS estimate validation failed.");
 Console.WriteLine("Passed POS estimated time validation checks.");
 var days = Enumerable.Range(0, 7).Select(day => new OpeningDay(day, day is not (1 or 2), "09:00", "22:00")).ToList();

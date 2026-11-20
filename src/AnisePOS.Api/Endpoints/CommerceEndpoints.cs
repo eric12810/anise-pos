@@ -24,7 +24,7 @@ public static class CommerceEndpoints
         (line2?.Trim().Length ?? 0) <= 150 && (line2 is null || !line2.Any(char.IsControl));
     public static bool ValidPosEstimate(OrderType type, int? minutes) => minutes is null ||
         (type is OrderType.Collection or OrderType.Delivery && minutes > 0 && minutes <= 1440 &&
-         minutes % (type == OrderType.Collection ? 5 : 10) == 0);
+         minutes % 5 == 0);
     private static async Task<Dictionary<(Guid CategoryId, Guid ProductId), int>> ProductPositions(AniseDbContext db)
     {
         var links = await db.Set<Dictionary<string, object>>("ProductCategories").AsNoTracking()
