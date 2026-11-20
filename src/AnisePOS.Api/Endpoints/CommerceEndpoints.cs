@@ -375,7 +375,7 @@ public static class CommerceEndpoints
             if (request.PaymentMethod is not PaymentMethod.Cash and not PaymentMethod.Card)
                 return Results.ValidationProblem(new Dictionary<string, string[]> { ["paymentMethod"] = ["Choose Cash or Card."] });
             if (!ValidPosEstimate(request.OrderType, request.EstimatedMinutes))
-                return Results.ValidationProblem(new Dictionary<string, string[]> { ["estimatedMinutes"] = ["Choose a valid estimate in 5-minute collection or 10-minute delivery increments."] });
+                return Results.ValidationProblem(new Dictionary<string, string[]> { ["estimatedMinutes"] = ["Choose a valid estimate in 5-minute increments."] });
 
             var variantIds = request.Lines.Select(line => line.VariantId).Distinct().ToList();
             var variants = await db.ProductVariants.Include(variant => variant.Product).ThenInclude(product => product.ModifierGroups).ThenInclude(link => link.ModifierGroup).ThenInclude(group => group.Modifiers)
@@ -408,11 +408,19 @@ public static class CommerceEndpoints
                 : null;
             order.Total = order.Subtotal + order.DeliveryFee + order.CustomFee;
             order.Payments.Add(new Payment { Method = request.PaymentMethod, Status = PaymentStatus.Pending, Amount = order.Total });
+            await using var tx = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable);
+            var startPreparing = !await db.Orders.AnyAsync(o => o.Status == OrderStatus.Preparing);
+            if (startPreparing) order.Status = OrderStatus.Preparing;
             order.StatusHistory.Add(new OrderStatusHistory { Status = OrderStatus.Draft,
                 Note = string.IsNullOrWhiteSpace(request.Source) ? "Order created" : $"Order created via {request.Source.Trim()}",
                 ChangedBy = staff.FindFirstValue(ClaimTypes.NameIdentifier) });
+            if (startPreparing)
+                order.StatusHistory.Add(new OrderStatusHistory { Status = OrderStatus.Preparing,
+                    Note = "Started preparing because the preparation queue was empty",
+                    ChangedBy = staff.FindFirstValue(ClaimTypes.NameIdentifier) });
             db.Orders.Add(order);
             await db.SaveChangesAsync();
+            await tx.CommitAsync();
             return Results.Created($"/api/orders/{order.OrderNumber}", new CreateOrderResponse(order.OrderNumber, order.Status, order.Total));
         });
 
