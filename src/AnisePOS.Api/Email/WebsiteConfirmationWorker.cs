@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AnisePOS.Api.Data;
+using AnisePOS.Api.Domain;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 
@@ -33,11 +34,13 @@ public sealed class WebsiteConfirmationWorker(IServiceScopeFactory scopes, Gmail
         var stale = DateTimeOffset.UtcNow.AddMinutes(-10);
         await db.WebsiteConfirmations.Where(x => x.State == "Sending" && x.UpdatedAtUtc < stale)
             .ExecuteUpdateAsync(x => x.SetProperty(y => y.State, "NeedsReview").SetProperty(y => y.UpdatedAtUtc, DateTimeOffset.UtcNow), ct);
-        var pending = await db.WebsiteConfirmations.AsNoTracking().Where(x => x.Kind == "Received" && x.State == "Pending")
+        var pending = await db.WebsiteConfirmations.AsNoTracking().Where(x => x.Kind == "Received" && x.State == "Pending" &&
+            (x.Order.Status == OrderStatus.Accepted || x.Order.Status == OrderStatus.Preparing || x.Order.Status == OrderStatus.Ready || x.Order.Status == OrderStatus.Completed))
             .OrderBy(x => x.CreatedAtUtc).Select(x => x.Id).FirstOrDefaultAsync(ct);
         if (pending == Guid.Empty) return;
         // A single worker claims the message. An interrupted/ambiguous send is not retried automatically.
-        var claimed = await db.WebsiteConfirmations.Where(x => x.Id == pending && x.Kind == "Received" && x.State == "Pending")
+        var claimed = await db.WebsiteConfirmations.Where(x => x.Id == pending && x.Kind == "Received" && x.State == "Pending" &&
+            (x.Order.Status == OrderStatus.Accepted || x.Order.Status == OrderStatus.Preparing || x.Order.Status == OrderStatus.Ready || x.Order.Status == OrderStatus.Completed))
             .ExecuteUpdateAsync(x => x.SetProperty(y => y.State, "Sending").SetProperty(y => y.UpdatedAtUtc, DateTimeOffset.UtcNow), ct);
         if (claimed != 1) return;
         var item = await db.WebsiteConfirmations.Include(x => x.Order).SingleAsync(x => x.Id == pending, ct);
@@ -45,7 +48,7 @@ public sealed class WebsiteConfirmationWorker(IServiceScopeFactory scopes, Gmail
         {
             var payload = JsonSerializer.Deserialize<ConfirmationPayload>(protection.CreateProtector("Anise.WebsiteConfirmation.v1").Unprotect(item.ProtectedPayload))
                 ?? throw new InvalidOperationException("Confirmation payload missing.");
-            await sender.SendAsync(payload.Email, item.Order.OrderNumber, payload.TrackingUrl, ct);
+            await sender.SendAsync(payload.Email, item.Order.OrderNumber, payload.TrackingUrl, item.Order.OrderType, item.Order.EstimatedAtUtc, ct);
             item.State = "Sent"; item.SentAtUtc = DateTimeOffset.UtcNow;
             item.ProtectedPayload = "";
         }

@@ -165,14 +165,23 @@ function buildOrderCard(order, id, compact = false) {
                 const acceptForm = element('form', undefined, 'accept-form');
                 const label = element('label', 'Minutes until ' + (order.orderType === 'Delivery' ? 'delivery' : 'collection'));
                 const estimate = element('input'); estimate.type = 'number'; estimate.min = '1'; estimate.max = '10080'; estimate.step = '1'; estimate.required = true;
-                estimate.value = order.orderType === 'Delivery' ? '30' : '15';
+                const existingEta = order.estimatedAtUtc && Number.isFinite(Date.parse(order.estimatedAtUtc)) ? new Date(order.estimatedAtUtc) : null;
+                estimate.value = existingEta ? String(Math.max(1, Math.ceil((existingEta.getTime() - Date.now()) / 60000))) : (order.orderType === 'Delivery' ? '30' : '15');
                 estimate.setAttribute('aria-label', 'Minutes until ' + order.orderType.toLowerCase() + ' for order ' + order.orderNumber);
-                let previousEstimate = estimate.value;
-                estimate.addEventListener('focus', () => { previousEstimate = estimate.value; estimate.value = ''; });
-                estimate.addEventListener('blur', () => { if (!estimate.value) estimate.value = previousEstimate; });
                 label.append(estimate); acceptForm.append(label);
+                const presets = element('div', undefined, 'eta-presets');
+                for (const minutes of [15, 20, 30, 40, 45, 60]) {
+                    const preset = element('button', minutes + ' min'); preset.type = 'button';
+                    preset.addEventListener('click', () => { estimate.value = String(minutes); estimate.dispatchEvent(new Event('input')); });
+                    presets.append(preset);
+                }
+                acceptForm.append(presets);
+                const chosen = element('p', '', 'detail'); acceptForm.append(chosen);
+                let changed = false;
+                estimate.addEventListener('input', () => { changed = true; chosen.textContent = estimate.value ? 'Accept with ETA: ' + new Date(Date.now() + Number(estimate.value) * 60000).toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'}) : 'Enter a custom ETA in minutes'; });
+                chosen.textContent = existingEta ? 'Current ETA: ' + existingEta.toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'}) + ' · kept unless changed' : 'Default ETA: ' + estimate.value + ' minutes';
                 const accept = element('button', 'Accept order', 'advance'); accept.type = 'submit'; accept.disabled = order.paymentStatus === 'RefundPending'; acceptForm.append(accept);
-                acceptForm.addEventListener('submit', event => { event.preventDefault(); if (acceptForm.reportValidity()) acceptWebsiteOrder(order, estimate.value); });
+                acceptForm.addEventListener('submit', event => { event.preventDefault(); if (acceptForm.reportValidity()) acceptWebsiteOrder(order, estimate.value, changed ? null : existingEta); });
                 const decline = element('button', 'Decline order', 'decline-order'); decline.type = 'button';
                 decline.addEventListener('click', () => declineWebsiteOrder(order));
                 card.append(acceptForm, decline);
@@ -285,11 +294,11 @@ function printerContent(order){ return receiptPrinterContent(order); }
       } catch {return false;}
     }
 
-async function acceptWebsiteOrder(order, estimate) {
+async function acceptWebsiteOrder(order, estimate, existingEta = null) {
     if (saving || loading) return;
     const minutes = Number(estimate);
     if (!Number.isInteger(minutes) || minutes < 1 || minutes > 10080) { message.textContent = 'Enter a whole number of minutes between 1 and 10080.'; return; }
-    const at = new Date(Date.now() + minutes * 60000);
+    const at = existingEta && existingEta > new Date() ? existingEta : new Date(Date.now() + minutes * 60000);
     saving = true;
     try {
         await request('/api/order-queue/' + order.orderNumber + '/accept', {

@@ -283,10 +283,15 @@ if (!AnisePOS.Api.Email.GmailConfirmationSender.ValidAddress("customer@example.c
     throw new Exception("Confirmation email address validation failed.");
 Console.WriteLine("Passed confirmation email address validation checks.");
 
-var receipt = AnisePOS.Api.Email.GmailConfirmationSender.Compose(42, "https://example.test/#secret");
-if (!receipt.Subject.Contains("#42 received") || !receipt.Body.Contains("awaiting acceptance") ||
+var receipt = AnisePOS.Api.Email.GmailConfirmationSender.Compose(42, "https://example.test/#secret", OrderType.Delivery,
+    new DateTimeOffset(2026, 11, 20, 18, 30, 0, TimeSpan.Zero));
+if (!receipt.Subject.Contains("#42 accepted") || !receipt.Body.Contains("Estimated delivery: 18:30") ||
     !receipt.Body.Contains("https://example.test/#secret") || !receipt.Body.Contains("expires 24 hours after ordering"))
     throw new Exception("Initial order receipt must include the private tracking link and its expiry.");
+var collectionReceipt = AnisePOS.Api.Email.GmailConfirmationSender.Compose(43, "https://example.test/#secret", OrderType.Collection,
+    new DateTimeOffset(2026, 11, 20, 18, 15, 0, TimeSpan.Zero));
+if (!collectionReceipt.Body.Contains("Estimated collection: 18:15"))
+    throw new Exception("Collection confirmation must include the accepted ETA.");
 
 var veganLine = new OrderLine { ProductName = "Vegetable Spring Rolls", VariantName = "Regular", Quantity = 2, IsVegan = true,
     Notes = "Extra crispy", Modifiers = new List<OrderLineModifier> { new() { ModifierName = "Chilli sauce" } } };
