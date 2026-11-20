@@ -164,7 +164,7 @@ function buildOrderCard(order, id, compact = false) {
             if (websiteOrder && order.status === 'Placed') {
                 const acceptForm = element('form', undefined, 'accept-form');
                 const label = element('label', 'Minutes until ' + (order.orderType === 'Delivery' ? 'delivery' : 'collection'));
-                const estimate = element('select', undefined, 'eta-wheel'); estimate.size = 5;
+                const estimate = element('select', undefined, 'eta-wheel');
                 const existingEta = order.estimatedAtUtc && Number.isFinite(Date.parse(order.estimatedAtUtc)) ? new Date(order.estimatedAtUtc) : null;
                 const initialMinutes = existingEta ? Math.max(1, Math.ceil((existingEta.getTime() - Date.now()) / 60000)) : (order.orderType === 'Delivery' ? 30 : 15);
                 for (let minutes = 5; minutes <= 240; minutes += 5) {
@@ -175,7 +175,6 @@ function buildOrderCard(order, id, compact = false) {
                     estimate.insertBefore(option, [...estimate.options].find(item => Number(item.value) > initialMinutes) || null);
                 }
                 estimate.value = String(initialMinutes);
-                requestAnimationFrame(() => { estimate.selectedOptions[0]?.scrollIntoView({block:'center'}); });
                 estimate.setAttribute('aria-label', 'Minutes until ' + order.orderType.toLowerCase() + ' for order ' + order.orderNumber);
                 label.append(estimate); acceptForm.append(label);
                 const chosen = element('p', '', 'detail'); acceptForm.append(chosen);
