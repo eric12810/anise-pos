@@ -164,21 +164,23 @@ function buildOrderCard(order, id, compact = false) {
             if (websiteOrder && order.status === 'Placed') {
                 const acceptForm = element('form', undefined, 'accept-form');
                 const label = element('label', 'Minutes until ' + (order.orderType === 'Delivery' ? 'delivery' : 'collection'));
-                const estimate = element('input'); estimate.type = 'number'; estimate.min = '1'; estimate.max = '10080'; estimate.step = '1'; estimate.required = true;
+                const estimate = element('select', undefined, 'eta-wheel'); estimate.size = 5;
                 const existingEta = order.estimatedAtUtc && Number.isFinite(Date.parse(order.estimatedAtUtc)) ? new Date(order.estimatedAtUtc) : null;
-                estimate.value = existingEta ? String(Math.max(1, Math.ceil((existingEta.getTime() - Date.now()) / 60000))) : (order.orderType === 'Delivery' ? '30' : '15');
+                const initialMinutes = existingEta ? Math.max(1, Math.ceil((existingEta.getTime() - Date.now()) / 60000)) : (order.orderType === 'Delivery' ? 30 : 15);
+                for (let minutes = 5; minutes <= 240; minutes += 5) {
+                    const option = element('option', minutes + ' min'); option.value = String(minutes); estimate.append(option);
+                }
+                if (existingEta && (initialMinutes % 5 || initialMinutes > 240)) {
+                    const option = element('option', initialMinutes + ' min · current'); option.value = String(initialMinutes);
+                    estimate.insertBefore(option, [...estimate.options].find(item => Number(item.value) > initialMinutes) || null);
+                }
+                estimate.value = String(initialMinutes);
+                requestAnimationFrame(() => { estimate.selectedOptions[0]?.scrollIntoView({block:'center'}); });
                 estimate.setAttribute('aria-label', 'Minutes until ' + order.orderType.toLowerCase() + ' for order ' + order.orderNumber);
                 label.append(estimate); acceptForm.append(label);
-                const presets = element('div', undefined, 'eta-presets');
-                for (const minutes of [15, 20, 30, 40, 45, 60]) {
-                    const preset = element('button', minutes + ' min'); preset.type = 'button';
-                    preset.addEventListener('click', () => { estimate.value = String(minutes); estimate.dispatchEvent(new Event('input')); });
-                    presets.append(preset);
-                }
-                acceptForm.append(presets);
                 const chosen = element('p', '', 'detail'); acceptForm.append(chosen);
                 let changed = false;
-                estimate.addEventListener('input', () => { changed = true; chosen.textContent = estimate.value ? 'Accept with ETA: ' + new Date(Date.now() + Number(estimate.value) * 60000).toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'}) : 'Enter a custom ETA in minutes'; });
+                estimate.addEventListener('change', () => { changed = true; chosen.textContent = 'Accept with ETA: ' + new Date(Date.now() + Number(estimate.value) * 60000).toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'}); });
                 chosen.textContent = existingEta ? 'Current ETA: ' + existingEta.toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'}) + ' · kept unless changed' : 'Default ETA: ' + estimate.value + ' minutes';
                 const accept = element('button', 'Accept order', 'advance'); accept.type = 'submit'; accept.disabled = order.paymentStatus === 'RefundPending'; acceptForm.append(accept);
                 acceptForm.addEventListener('submit', event => { event.preventDefault(); if (acceptForm.reportValidity()) acceptWebsiteOrder(order, estimate.value, changed ? null : existingEta); });
