@@ -307,14 +307,15 @@ async function acceptWebsiteOrder(order, estimate, existingEta = null) {
             method: 'POST', headers: {'Content-Type': 'application/json', 'X-HTTP-Method-Override': 'PUT'}, body: JSON.stringify({estimatedAtUtc: at.toISOString()})
         });
         document.activeElement?.blur();
-        message.textContent = 'Order #' + order.orderNumber + ' accepted. Sending two receipts to the printer…';
-        const printed = await autoPrintReceipt(order.orderNumber);
         saving = false;
         closeOrderDetails();
         await load();
-        message.textContent = printed
-            ? 'Order #' + order.orderNumber + ' accepted. Two receipts sent to the printer; check the receipts.'
-            : 'Order #' + order.orderNumber + ' accepted, but printing could not be confirmed. Check the printer before reprinting from Customer receipt.';
+        message.textContent = 'Order #' + order.orderNumber + ' accepted. Sending two receipts to the printer…';
+        void autoPrintReceipt(order.orderNumber).then(printed => {
+            message.textContent = printed
+                ? 'Order #' + order.orderNumber + ' accepted. Two receipts sent to the printer; check the receipts.'
+                : 'Order #' + order.orderNumber + ' accepted, but printing could not be confirmed. Check the printer before reprinting from Customer receipt.';
+        });
     } catch (error) { message.textContent = error.message + ' Check the order queue before trying again.'; }
     finally { saving = false; }
 }
