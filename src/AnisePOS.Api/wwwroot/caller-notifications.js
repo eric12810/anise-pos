@@ -67,6 +67,11 @@
   }
   function accept(notification, sequence) {
     if (sequence > cursor) cursor = sequence;
+    // Existing staging workers may emit PascalCase during a rolling deployment.
+    if (!notification.eventId && notification.EventId) notification = {
+      eventId:notification.EventId, timestamp:notification.Timestamp, callerNumber:notification.CallerNumber,
+      customerId:notification.CustomerId, customerName:notification.CustomerName
+    };
     const id = notification.eventId;
     if (!id || dismissed.has(id) || cards.some(card => card.eventId === id)) { persist(); return; }
     const card = {eventId:id, timestamp:notification.timestamp, callerNumber:notification.callerNumber,

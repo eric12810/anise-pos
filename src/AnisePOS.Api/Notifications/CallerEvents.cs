@@ -11,6 +11,9 @@ public sealed record CallerNotification(Guid EventId, DateTimeOffset Timestamp, 
 
 public static class CallerEventEndpoints
 {
+    public static string SerializeStreamNotification(CallerNotification notification) =>
+        JsonSerializer.Serialize(notification, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
     public static bool Authorized(string? supplied, string? configured)
     {
         if (string.IsNullOrEmpty(supplied) || string.IsNullOrEmpty(configured) || configured.Length < 32) return false;
@@ -118,7 +121,7 @@ public static class CallerEventEndpoints
                     foreach (var item in events)
                     {
                         sequence = item.Sequence;
-                        await context.Response.WriteAsync("id: " + sequence + "\ndata: " + JsonSerializer.Serialize(item.Notification) + "\n\n", context.RequestAborted);
+                        await context.Response.WriteAsync("id: " + sequence + "\ndata: " + SerializeStreamNotification(item.Notification) + "\n\n", context.RequestAborted);
                     }
                     if (events.Count > 0) await context.Response.Body.FlushAsync(context.RequestAborted);
                     if (DateTimeOffset.UtcNow - lastHeartbeat >= TimeSpan.FromSeconds(15))

@@ -10,6 +10,7 @@ using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Configuration;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Cryptography;
+using System.Text.Json;
 using WebPush;
 
 // Run the production-only EF schema mapping without opening a SQL connection.
@@ -29,6 +30,14 @@ if (!CallerEventEndpoints.Authorized(new string('s', 40), new string('s', 40)) |
     CallerEventEndpoints.Valid(new(callerId, "07123456789", callerNow.AddMinutes(-3), "incoming/ringing"), callerNow))
     throw new Exception("Caller authentication, telephone or timestamp checks failed.");
 Console.WriteLine("Passed caller event authentication, customer lookup, telephone and timestamp checks.");
+using (var streamPayload = JsonDocument.Parse(CallerEventEndpoints.SerializeStreamNotification(
+    new CallerNotification(callerId, callerNow, "07123456789", null, null))))
+{
+    if (streamPayload.RootElement.GetProperty("eventId").GetGuid() != callerId ||
+        streamPayload.RootElement.GetProperty("callerNumber").GetString() != "07123456789")
+        throw new Exception("Caller stream payload must use browser-compatible JSON names.");
+}
+Console.WriteLine("Passed caller stream JSON compatibility check.");
 
 using (var model = new AniseDbContext(new DbContextOptionsBuilder<AniseDbContext>()
            .UseSqlServer("Server=localhost;Database=offline-model-check").Options))
