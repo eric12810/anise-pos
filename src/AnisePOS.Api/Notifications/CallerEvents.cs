@@ -1,7 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using System.Threading.Channels;
 using AnisePOS.Api.Data;
 using Microsoft.EntityFrameworkCore;
 
@@ -9,43 +8,6 @@ namespace AnisePOS.Api.Notifications;
 
 public sealed record IncomingCallerEvent(Guid EventId, string? CallerNumber, DateTimeOffset Timestamp, string EventType);
 public sealed record CallerNotification(Guid EventId, DateTimeOffset Timestamp, string? CallerNumber, Guid? CustomerId, string? CustomerName);
-
-public sealed class CallerEventBroker
-{
-    private readonly object gate = new();
-    private readonly Dictionary<Guid, DateTimeOffset> seen = new();
-    private readonly HashSet<Channel<CallerNotification>> listeners = new();
-
-    public bool Reserve(Guid id, DateTimeOffset now)
-    {
-        lock (gate)
-        {
-            foreach (var old in seen.Where(x => x.Value < now.AddMinutes(-10)).Select(x => x.Key).ToArray()) seen.Remove(old);
-            return seen.TryAdd(id, now);
-        }
-    }
-
-    public void Release(Guid id) { lock (gate) seen.Remove(id); }
-
-    public ChannelReader<CallerNotification> Subscribe(out Channel<CallerNotification> channel)
-    {
-        channel = Channel.CreateBounded<CallerNotification>(new BoundedChannelOptions(32)
-        { FullMode = BoundedChannelFullMode.DropOldest, SingleReader = true, SingleWriter = false });
-        lock (gate) listeners.Add(channel);
-        return channel.Reader;
-    }
-
-    public void Unsubscribe(Channel<CallerNotification> channel)
-    {
-        lock (gate) listeners.Remove(channel);
-        channel.Writer.TryComplete();
-    }
-
-    public void Publish(CallerNotification notification)
-    {
-        lock (gate) foreach (var listener in listeners) listener.Writer.TryWrite(notification);
-    }
-}
 
 public static class CallerEventEndpoints
 {
@@ -80,7 +42,7 @@ public static class CallerEventEndpoints
     public static void MapCallerEventEndpoints(this IEndpointRouteBuilder app)
     {
         app.MapPost("/api/caller/events", async (HttpContext context, IncomingCallerEvent? request,
-            IConfiguration config, AniseDbContext db, CallerEventBroker broker, CancellationToken ct) =>
+            IConfiguration config, AniseDbContext db, CallerEventStore store, CancellationToken ct) =>
         {
             if (!context.Request.IsHttps) return Results.StatusCode(403);
             var auth = context.Request.Headers.Authorization.ToString();
@@ -88,62 +50,65 @@ public static class CallerEventEndpoints
                 !Authorized(auth[7..], config["CallerId:IngestSecret"])) return Results.Unauthorized();
             var now = DateTimeOffset.UtcNow;
             if (!Valid(request, now)) return Results.BadRequest(new { message = "Invalid caller event." });
-            if (!broker.Reserve(request!.EventId, now)) return Results.Ok(new { accepted = true, duplicate = true });
-            try
+            var callerEvent = request!;
+            var phone = NormalizePhone(callerEvent.CallerNumber);
+            Guid? customerId = null;
+            string? customerName = null;
+            if (phone is not null)
             {
-                var phone = NormalizePhone(request.CallerNumber);
-                Guid? customerId = null;
-                string? customerName = null;
-                if (phone is not null)
+                // Customer.Phone is free text. Narrow candidates in SQL, then compare canonical numbers in .NET.
+                var suffix = phone.Length >= 7 ? phone[^7..] : phone;
+                var candidates = await db.Customers.AsNoTracking()
+                    .Where(c => c.Phone != null && c.Phone.Replace(" ", "").Replace("-", "").Replace("(", "").Replace(")", "").EndsWith(suffix))
+                    .OrderByDescending(c => c.UpdatedAtUtc ?? c.CreatedAtUtc)
+                    .Select(c => new { c.Id, c.FirstName, c.LastName, c.Phone }).Take(100).ToListAsync(ct);
+                var match = FindCustomer(candidates, phone, c => c.Phone);
+                if (match is not null)
                 {
-                    // Customer.Phone is free text. Narrow candidates in SQL, then compare canonical numbers in .NET.
-                    var suffix = phone.Length >= 7 ? phone[^7..] : phone;
-                    var candidates = await db.Customers.AsNoTracking()
-                        .Where(c => c.Phone != null && c.Phone.Replace(" ", "").Replace("-", "").Replace("(", "").Replace(")", "").EndsWith(suffix))
-                        .OrderByDescending(c => c.UpdatedAtUtc ?? c.CreatedAtUtc)
-                        .Select(c => new { c.Id, c.FirstName, c.LastName, c.Phone }).Take(100).ToListAsync(ct);
-                    var match = FindCustomer(candidates, phone, c => c.Phone);
-                    if (match is not null)
-                    {
-                        customerId = match.Id;
-                        customerName = string.Join(" ", new[] { match.FirstName, match.LastName }.Where(x => !string.IsNullOrWhiteSpace(x)));
-                    }
+                    customerId = match.Id;
+                    customerName = string.Join(" ", new[] { match.FirstName, match.LastName }.Where(x => !string.IsNullOrWhiteSpace(x)));
                 }
-                broker.Publish(new CallerNotification(request.EventId, request.Timestamp, phone, customerId, customerName));
-                return Results.Accepted(value: new { accepted = true, duplicate = false });
             }
-            catch { broker.Release(request.EventId); throw; }
+            if (!await store.InsertAsync(new CallerNotification(callerEvent.EventId, callerEvent.Timestamp, phone, customerId, customerName), ct))
+                return Results.Ok(new { accepted = true, duplicate = true });
+            return Results.Accepted(value: new { accepted = true, duplicate = false });
         }).RequireRateLimiting("caller-events").DisableAntiforgery();
 
-        app.MapGet("/api/caller/stream", async (HttpContext context, CallerEventBroker broker) =>
+        app.MapGet("/api/caller/stream", async (HttpContext context, CallerEventStore store, IConfiguration config) =>
         {
             if (!context.Request.IsHttps) { context.Response.StatusCode = 403; return; }
+            if (config["CallerId:IngestSecret"]?.Length < 32 || config["CallerId:IngestSecret"] is null)
+            { context.Response.StatusCode = 404; return; }
             context.Response.ContentType = "text/event-stream";
             context.Response.Headers.CacheControl = "no-store";
             context.Response.Headers["X-Accel-Buffering"] = "no";
-            var reader = broker.Subscribe(out var channel);
+            var lastEventId = context.Request.Headers["Last-Event-ID"].ToString();
+            long sequence = long.TryParse(lastEventId, out var remembered) && remembered >= 0
+                ? remembered : await store.LatestSequenceAsync(context.RequestAborted);
             try
             {
                 await context.Response.WriteAsync(": connected\n\n", context.RequestAborted);
+                await context.Response.Body.FlushAsync(context.RequestAborted);
+                var lastHeartbeat = DateTimeOffset.UtcNow;
                 while (!context.RequestAborted.IsCancellationRequested)
                 {
-                    using var heartbeat = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
-                    heartbeat.CancelAfter(TimeSpan.FromSeconds(15));
-                    bool available;
-                    try { available = await reader.WaitToReadAsync(heartbeat.Token); }
-                    catch (OperationCanceledException) when (!context.RequestAborted.IsCancellationRequested)
-                    { await context.Response.WriteAsync(": heartbeat\n\n", context.RequestAborted); await context.Response.Body.FlushAsync(context.RequestAborted); continue; }
-                    if (!available) break;
-                    while (reader.TryRead(out var item))
+                    var events = await store.ReadAfterAsync(sequence, context.RequestAborted);
+                    foreach (var item in events)
                     {
-                        if (item.Timestamp < DateTimeOffset.UtcNow.AddMinutes(-2)) continue;
-                        await context.Response.WriteAsync("data: " + JsonSerializer.Serialize(item) + "\n\n", context.RequestAborted);
+                        sequence = item.Sequence;
+                        await context.Response.WriteAsync("id: " + sequence + "\ndata: " + JsonSerializer.Serialize(item.Notification) + "\n\n", context.RequestAborted);
                     }
-                    await context.Response.Body.FlushAsync(context.RequestAborted);
+                    if (events.Count > 0) await context.Response.Body.FlushAsync(context.RequestAborted);
+                    if (DateTimeOffset.UtcNow - lastHeartbeat >= TimeSpan.FromSeconds(15))
+                    {
+                        await context.Response.WriteAsync(": heartbeat\n\n", context.RequestAborted);
+                        await context.Response.Body.FlushAsync(context.RequestAborted);
+                        lastHeartbeat = DateTimeOffset.UtcNow;
+                    }
+                    await Task.Delay(TimeSpan.FromSeconds(1), context.RequestAborted);
                 }
             }
             catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested) { }
-            finally { broker.Unsubscribe(channel); }
         }).RequireAuthorization();
     }
 }

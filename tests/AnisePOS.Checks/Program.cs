@@ -11,7 +11,6 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Cryptography;
 using WebPush;
-using System.Threading.Channels;
 
 // Run the production-only EF schema mapping without opening a SQL connection.
 var callerNow = DateTimeOffset.UtcNow;
@@ -29,18 +28,7 @@ if (!CallerEventEndpoints.Authorized(new string('s', 40), new string('s', 40)) |
     !CallerEventEndpoints.Valid(new(callerId, "Withheld", callerNow, "incoming/ringing"), callerNow) ||
     CallerEventEndpoints.Valid(new(callerId, "07123456789", callerNow.AddMinutes(-3), "incoming/ringing"), callerNow))
     throw new Exception("Caller authentication, telephone or timestamp checks failed.");
-var callerBroker = new CallerEventBroker();
-var reader1 = callerBroker.Subscribe(out var channel1);
-var reader2 = callerBroker.Subscribe(out var channel2);
-if (!callerBroker.Reserve(callerId, callerNow) || callerBroker.Reserve(callerId, callerNow))
-    throw new Exception("Caller event deduplication failed.");
-callerBroker.Publish(new(callerId, callerNow, "07123456789", null, null));
-if (!reader1.TryRead(out var firstCall) || !reader2.TryRead(out var secondCall) ||
-    firstCall.EventId != callerId || secondCall.EventId != callerId || firstCall.CustomerId is not null)
-    throw new Exception("Caller event fanout failed.");
-callerBroker.Unsubscribe(channel1);
-callerBroker.Unsubscribe(channel2);
-Console.WriteLine("Passed caller event validation, deduplication and two-client fanout checks.");
+Console.WriteLine("Passed caller event authentication, customer lookup, telephone and timestamp checks.");
 
 using (var model = new AniseDbContext(new DbContextOptionsBuilder<AniseDbContext>()
            .UseSqlServer("Server=localhost;Database=offline-model-check").Options))

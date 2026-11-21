@@ -12,7 +12,9 @@ Authenticated staff clients can open `GET /api/caller/stream` with their existin
 
 Customer lookup reads `Customers.Phone`, which is stored as free text up to 30 characters. Existing order address lookup also matches `Orders.CustomerPhone`, but caller matching deliberately uses saved customers only; it never creates or edits customer or order rows. UK `+44`, `0044`, and local leading-zero forms compare as local numbers. International prefixes remain international. Withheld and unknown numbers yield no customer match. No addresses or order history are broadcast.
 
-Deduplication and client fanout are in memory with a ten-minute event-ID window. Run one staging API instance for this stage. A restart loses the deduplication window, and multiple API instances require a shared broker/store before enabling this feature. Stale events older than two minutes are rejected; clients also discard stale queued frames. No database migration is needed.
+Caller events now use a shared SQL Server table, so separate staging POS workers can deliver the same event to multiple authenticated browsers. The event ID is unique in SQL; SSE sequence IDs let browsers resume across reconnects without duplicating delivered events. Ingest rejects events older than two minutes. The stream omits events older than two minutes, and a background worker removes stored rows after ten minutes. Browser clients do not poll; the POS API checks the small shared table every second while the SSE connection is open.
+
+**Migration required before deploying this revision:** `database/012_caller_events.sql` adds only `dbo.CallerEvents`, with an identity sequence, unique event ID, event and receive timestamps, normalized caller number, and optional matched customer ID/name. It does not change customer, order, payment, or existing notification tables. The table contains short-lived personal data, so limit database access and verify expiry. No production migration or deployment is included. Before applying on staging, independently verify the active staging database identity and separation from production, ensure a restorable staging backup, compare the existing schema, review this script, and run the migration only through the approved staging process. Deploy the API only after the table exists. Rollback requires approval because dropping the table destroys any retained caller events.
 
 ## Safe simulation
 
@@ -30,7 +32,7 @@ Observe the stream only from a browser session already signed into staging POS. 
 ## Staging deployment preparation
 
 1. Review the POS and Mac diffs; run `dotnet run --project tests/AnisePOS.Checks/AnisePOS.Checks.csproj` and `python3 -m unittest discover -s tests -v` in their respective projects.
-2. Confirm the staging site URL, the active staging POS settings and database identity using the project's normal deployment preflight. Keep the production host and database untouched.
+2. Confirm the staging site URL, the active staging POS settings and database identity using the project's normal deployment preflight. Verify a restorable staging backup, then review and apply `database/012_caller_events.sql` to staging only before deploying this revision. Keep the production host and database untouched.
 3. Install a random dedicated secret in the staging POS host environment and the Mac's owner-only secret file. Configure `pos_url` and `pos_secret_file` in the Mac's local `config.json`.
 4. Use the existing staging deployment workflow only after separate deployment approval. Verify staging health and existing order notifications, then simulate a withheld event and check the authenticated stream on two signed-in POS clients.
 5. Update the installed Mac listener through its existing launchd installation procedure after reviewing the workspace copy. Changes to this repository alone do not update the running service.

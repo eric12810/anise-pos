@@ -36,7 +36,8 @@ builder.Services.AddHostedService<WebsiteStripeReconciliationWorker>();
 builder.Services.AddSingleton<PushKeyStore>();
 builder.Services.AddHostedService<StaffPushWorker>();
 builder.Services.AddSingleton<ReceiptPrinter>();
-builder.Services.AddSingleton<CallerEventBroker>();
+builder.Services.AddSingleton<CallerEventStore>();
+builder.Services.AddHostedService<CallerEventCleanupWorker>();
 builder.Services.AddRateLimiter(options => options.AddPolicy("caller-events", context =>
     RateLimitPartition.GetFixedWindowLimiter(context.Connection.RemoteIpAddress?.ToString() ?? "unknown", _ =>
         new FixedWindowRateLimiterOptions { PermitLimit = 30, Window = TimeSpan.FromMinutes(1), QueueLimit = 0, AutoReplenishment = true })));
