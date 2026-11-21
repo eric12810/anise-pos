@@ -7,8 +7,8 @@ import { fileURLToPath } from 'node:url';
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const pos=fs.readFileSync(path.join(root,'src/AnisePOS.Api/wwwroot/pos.html'),'utf8');
-const start=pos.indexOf('function clearCurrentOrder(){');
-const end=pos.indexOf("document.querySelector('#clear-order').onclick=clearCurrentOrder;",start);
+const start=pos.indexOf('function clearCurrentOrder(confirmed=false){');
+const end=pos.indexOf("document.querySelector('#clear-order').onclick=()=>clearCurrentOrder();",start);
 assert.ok(start>0&&end>start);
 const source=pos.slice(start,end);
 

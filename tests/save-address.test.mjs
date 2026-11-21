@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const pos=fs.readFileSync(path.join(root,'src/AnisePOS.Api/wwwroot/pos.html'),'utf8');
 const start=pos.indexOf("document.querySelector('#save-address').onclick=async()=>{");
-const end=pos.indexOf('function clearCurrentOrder(){',start);
+const end=pos.indexOf('function clearCurrentOrder(confirmed=false){',start);
 assert.ok(start>0&&end>start);
 const source=pos.slice(start,end);
 
