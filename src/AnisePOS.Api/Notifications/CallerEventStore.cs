@@ -47,7 +47,7 @@ public sealed class CallerEventStore(IConfiguration configuration)
         command.CommandText = """
             SELECT TOP (100) Sequence, EventId, EventAtUtc, Phone, CustomerId, CustomerName
             FROM dbo.CallerEvents
-            WHERE Sequence > @sequence AND ReceivedAtUtc >= DATEADD(minute, -2, SYSUTCDATETIME())
+            WHERE Sequence > @sequence AND ReceivedAtUtc >= DATEADD(minute, -10, SYSUTCDATETIME())
             ORDER BY Sequence
             """;
         command.Parameters.Add("@sequence", SqlDbType.BigInt).Value = sequence;

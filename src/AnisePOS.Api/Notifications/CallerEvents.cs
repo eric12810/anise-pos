@@ -44,8 +44,8 @@ public static class CallerEventEndpoints
 
     public static void MapCallerEventEndpoints(this IEndpointRouteBuilder app)
     {
-        app.MapGet("/api/caller/recent", async (CallerEventStore store, CancellationToken ct) =>
-            Results.Ok(await store.ReadAfterAsync(0, ct))).RequireAuthorization();
+        app.MapGet("/api/caller/recent", async (long? after, CallerEventStore store, CancellationToken ct) =>
+            Results.Ok(await store.ReadAfterAsync(Math.Max(0, after ?? 0), ct))).RequireAuthorization();
 
         app.MapGet("/api/caller/customer", async (string phone, AniseDbContext db, CancellationToken ct) =>
         {

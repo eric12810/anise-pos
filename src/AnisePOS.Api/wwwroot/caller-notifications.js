@@ -88,10 +88,26 @@
       {detail:{phone:card.callerNumber,eventId:card.eventId,name:card.name}})), 0);
     history.replaceState(null, '', '/pos.html');
   }
-  fetch('/api/caller/recent', {cache:'no-store'}).then(r => r.ok ? r.json() : []).then(items => {
-    for (const item of items) accept(item.notification, item.sequence);
-  }).catch(() => {});
-  const stream = new EventSource('/api/caller/stream');
-  stream.onmessage = event => { try { accept(JSON.parse(event.data), Number(event.lastEventId)); } catch {} };
-  window.addEventListener('pagehide', () => stream.close(), {once:true});
+  let checking = false;
+  async function catchUp() {
+    if (checking || document.hidden) return;
+    checking = true;
+    try {
+      const response = await fetch('/api/caller/recent?after=' + encodeURIComponent(cursor), {cache:'no-store'});
+      if (response.ok) for (const item of await response.json()) accept(item.notification, item.sequence);
+    } catch { /* The next check will retry. */ }
+    finally { checking = false; }
+  }
+  let stream;
+  function connect() {
+    if (stream || document.hidden) return;
+    stream = new EventSource('/api/caller/stream');
+    stream.onmessage = event => { try { accept(JSON.parse(event.data), Number(event.lastEventId)); } catch {} };
+  }
+  catchUp(); connect();
+  setInterval(catchUp, 15000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { catchUp(); connect(); } });
+  window.addEventListener('focus', catchUp);
+  window.addEventListener('pagehide', () => { stream?.close(); stream = null; });
+  window.addEventListener('pageshow', () => { catchUp(); connect(); });
 })();
