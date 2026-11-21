@@ -14,6 +14,7 @@
       if (!staff) return;
       nav.querySelectorAll('[data-roles]').forEach(link => { link.hidden = !link.dataset.roles.split(',').includes(staff.role); });
       const alerts = document.createElement('script'); alerts.src = '/pos-alerts.js?v=2'; document.head.append(alerts);
+      const calls = document.createElement('script'); calls.src = '/caller-notifications.js?v=1'; document.head.append(calls);
     })
     .catch(() => {});
 })();

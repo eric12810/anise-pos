@@ -41,6 +41,28 @@ public static class CallerEventEndpoints
 
     public static void MapCallerEventEndpoints(this IEndpointRouteBuilder app)
     {
+        app.MapGet("/api/caller/recent", async (CallerEventStore store, CancellationToken ct) =>
+            Results.Ok(await store.ReadAfterAsync(0, ct))).RequireAuthorization();
+
+        app.MapGet("/api/caller/customer", async (string phone, AniseDbContext db, CancellationToken ct) =>
+        {
+            var normalized = NormalizePhone(phone);
+            if (normalized is null) return Results.BadRequest();
+            var suffix = normalized[^7..];
+            var candidates = await db.Customers.AsNoTracking().Include(c => c.Addresses)
+                .Where(c => c.Phone != null && c.Phone.Replace(" ", "").Replace("-", "").Replace("(", "").Replace(")", "").EndsWith(suffix))
+                .OrderByDescending(c => c.UpdatedAtUtc ?? c.CreatedAtUtc).Take(100).ToListAsync(ct);
+            var customer = FindCustomer(candidates, normalized, c => c.Phone);
+            var address = customer?.Addresses.Where(a => !string.IsNullOrWhiteSpace(a.Line1))
+                .OrderByDescending(a => a.IsDefault).ThenByDescending(a => a.CreatedAtUtc).FirstOrDefault();
+            var lastOrder = customer is null ? null : await db.Orders.AsNoTracking()
+                .Where(o => o.CustomerId == customer.Id).OrderByDescending(o => o.CreatedAtUtc)
+                .Select(o => (DateTimeOffset?)o.CreatedAtUtc).FirstOrDefaultAsync(ct);
+            return Results.Ok(new { existing = customer is not null,
+                name = customer is null ? null : string.Join(" ", new[] { customer.FirstName, customer.LastName }.Where(x => !string.IsNullOrWhiteSpace(x))),
+                address = address is null ? null : string.Join(", ", new[] { address.Line1, address.Line2, address.City, address.Postcode }.Where(x => !string.IsNullOrWhiteSpace(x))),
+                lastOrder });
+        }).RequireAuthorization();
         app.MapPost("/api/caller/events", async (HttpContext context, IncomingCallerEvent? request,
             IConfiguration config, AniseDbContext db, CallerEventStore store, CancellationToken ct) =>
         {

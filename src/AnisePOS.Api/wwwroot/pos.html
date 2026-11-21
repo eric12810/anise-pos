@@ -29,7 +29,7 @@
     @media (max-width:800px) { main { grid-template-columns:1fr; height:auto }.menu { min-height:400px; max-height:65vh }.cart { border-left:0; border-top:1px solid var(--line); min-height:520px } }
     @media (max-width:520px) { .menu { grid-template-columns:120px minmax(0,1fr); gap:10px; padding:12px }.category { padding:10px; font-size:14px } #products { grid-template-columns:1fr; gap:8px }.product-image { height:72px } }
   </style>
-<link rel="stylesheet" href="/pos-navigation.css?v=4"><script defer src="/pos-navigation.js?v=4"></script><link rel="manifest" href="/pos.webmanifest"><link rel="apple-touch-icon" href="/pos-icon.png"><meta name="theme-color" content="#2c6447"></head>
+<link rel="stylesheet" href="/pos-navigation.css?v=5"><script defer src="/pos-navigation.js?v=5"></script><link rel="manifest" href="/pos.webmanifest"><link rel="apple-touch-icon" href="/pos-icon.png"><meta name="theme-color" content="#2c6447"></head>
 <body class="pos-screen">
   <header class="pos-header"><h1>Anise POS</h1><nav class="pos-navigation" aria-label="POS navigation"><a href="/pos.html">POS</a><a href="/orders.html">Order queue</a><a href="/history.html">Order history</a><a href="/menu-admin.html" data-roles="Owner,Manager" hidden>Menu manager</a><a href="/reports.html" data-roles="Owner,Manager" hidden>Reports</a><a id="website-settings-link" href="/website-settings.html" data-roles="Owner,Manager" hidden>Settings</a><a href="/staff-admin.html" data-roles="Owner" hidden>Staff</a></nav><span id="staff">Checking staff session…</span></header>
   <main><section class="menu"><nav class="categories" id="categories" aria-label="Menu categories"></nav><div id="products"></div></section>
@@ -46,6 +46,24 @@
     const state={ menu:[], category:null, cart:[], type:'Collection', payment:'Cash', selected:null, deliveryAddress:{postcode:'',line1:'',line2:''} };
     let printingDraft=false,placingOrder=false,savingAddress=false;
     let deliveryEditVersion=0,postcodeSearch,postcodeBlurTimer,postcodeSelectionPending=false;
+    window.addEventListener('anise-open-caller-order', event => {
+      const phone = event.detail?.phone;
+      if (!phone || !/^[0-9]+$/.test(phone)) return;
+      const fields = ['customer-name','customer-phone','delivery-address','delivery-address-2','notes','custom-fee-description'];
+      const hasDraft = state.cart.length || fields.some(id => document.getElementById(id).value.trim()) ||
+        Number(document.getElementById('custom-fee').value) > 0 || Number(document.getElementById('delivery-fee').value) > 0 ||
+        state.deliveryAddress.postcode || state.type !== 'Collection' || state.payment !== 'Cash';
+      if (placingOrder || printingDraft || savingAddress ||
+          (hasDraft && !window.confirm('Replace the current in-progress order? Items and entered details will be lost.'))) return;
+      if (hasDraft) clearCurrentOrder(true);
+      if (event.detail.name) document.getElementById('customer-name').value = event.detail.name;
+      const input = document.getElementById('customer-phone');
+      input.value = phone;
+      input.dispatchEvent(new Event('input', {bubbles:true}));
+      input.scrollIntoView({block:'center'});
+      input.focus();
+      window.dispatchEvent(new CustomEvent('anise-caller-order-opened', {detail:{eventId:event.detail.eventId}}));
+    });
     function updateEstimateOptions(){const select=document.querySelector('#estimate-minutes'),delivery=state.type==='Delivery';document.querySelector('#estimate-label').textContent='Estimated '+state.type.toLowerCase()+' time';select.replaceChildren();for(let minutes=5;minutes<=240;minutes+=5){const option=document.createElement('option');option.value=String(minutes);option.textContent=minutes+' minutes';select.append(option)}select.value=String(delivery?30:10)}
     updateEstimateOptions();
     const money=value=>new Intl.NumberFormat('en-GB',{style:'currency',currency:'GBP'}).format(value);
@@ -141,12 +159,12 @@
       }catch{status.textContent='Could not save the address. Check the details and try again.'}
       finally{savingAddress=false;button.disabled=false}
     };
-    function clearCurrentOrder(){
+    function clearCurrentOrder(confirmed=false){
       if(placingOrder||printingDraft||savingAddress)return;
       const fields=['customer-name','customer-phone','delivery-address','delivery-address-2','notes','custom-fee','custom-fee-description'];
       const hasDetails=fields.filter(id=>id!=='custom-fee').some(id=>document.querySelector('#'+id).value.trim())||Number(document.querySelector('#custom-fee').value)>0||Number(document.querySelector('#delivery-fee').value)>0||state.deliveryAddress.postcode||state.type!=='Collection'||state.payment!=='Cash'||document.querySelector('#delivery-fee-override').checked;
       if(!state.cart.length&&!hasDetails){document.querySelector('#notice').textContent='Order is already clear.';return}
-      if(!window.confirm('Clear this in-progress order? Items and entered details will be lost.'))return;
+      if(!confirmed&&!window.confirm('Clear this in-progress order? Items and entered details will be lost.'))return;
       clearTimeout(phoneLookupTimer);phoneLookupVersion++;deliveryEditVersion++;
       clearTimeout(postcodeBlurTimer);postcodeSelectionPending=false;
       routeVersion++;selectedPlace=null;
@@ -164,7 +182,7 @@
       updateEstimateOptions();renderCart();
       const notice=document.querySelector('#notice');notice.className='success';notice.textContent='Current order cleared.';
     }
-    document.querySelector('#clear-order').onclick=clearCurrentOrder;
+    document.querySelector('#clear-order').onclick=()=>clearCurrentOrder();
     function draftReceipt(){
       const lines=state.cart.map(line=>{
         const product=state.menu.flatMap(category=>category.products).find(item=>item.variants.some(variant=>variant.id===line.variantId));
