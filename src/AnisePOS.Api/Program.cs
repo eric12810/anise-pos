@@ -36,6 +36,10 @@ builder.Services.AddHostedService<WebsiteStripeReconciliationWorker>();
 builder.Services.AddSingleton<PushKeyStore>();
 builder.Services.AddHostedService<StaffPushWorker>();
 builder.Services.AddSingleton<ReceiptPrinter>();
+builder.Services.AddSingleton<CallerEventBroker>();
+builder.Services.AddRateLimiter(options => options.AddPolicy("caller-events", context =>
+    RateLimitPartition.GetFixedWindowLimiter(context.Connection.RemoteIpAddress?.ToString() ?? "unknown", _ =>
+        new FixedWindowRateLimiterOptions { PermitLimit = 30, Window = TimeSpan.FromMinutes(1), QueueLimit = 0, AutoReplenishment = true })));
 builder.Services.AddRateLimiter(options => options.AddFixedWindowLimiter("website-checkout", limiter =>
 {
     limiter.PermitLimit = 20;
@@ -242,6 +246,7 @@ app.MapWebsiteStripeWebhook();
 app.MapOrderQueueEndpoints();
 app.MapOrderLifecycleEndpoints();
 app.MapStaffPushEndpoints();
+app.MapCallerEventEndpoints();
 
 app.MapReportEndpoints();
 app.MapAdminEndpoints();
