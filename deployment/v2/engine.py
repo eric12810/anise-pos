@@ -83,7 +83,7 @@ def directory_for(ftp, target, name):
         ftp.cwd(part)
 
 
-def install_files(ftp, target, root, files, verified_existing=None, known_dirs=None):
+def install_files(ftp, target, root, files, verified_existing=None, known_dirs=None, progress=None):
     for name, digest in sorted(files.items()):
         # The caller has already downloaded and hashed every managed live file.
         if verified_existing is not None and verified_existing.get(name) == digest:
@@ -98,6 +98,8 @@ def install_files(ftp, target, root, files, verified_existing=None, known_dirs=N
         data = (Path(root) / name).read_bytes()
         if sha256(data).hexdigest() != digest:
             raise ValueError("Local artifact changed during deployment")
+        if progress is not None:
+            progress(name)
         verified_put(ftp, PurePosixPath(name).name, data)
     ftp.cwd(target.root)
 
@@ -250,7 +252,8 @@ def staging_deploy(ftp, target, root, release, *, health_check=health, sleeper=t
     try:
         sleeper(15)
         known_dirs = {str(PurePosixPath(name).parent) for name in current["files"]}
-        install_files(ftp, target, root, changed, known_dirs=known_dirs)
+        install_files(ftp, target, root, changed, known_dirs=known_dirs,
+                      progress=lambda name: print("STAGING installing:", name, flush=True))
         uploaded = state_bytes(target, release, artifact, "uploaded", files, current["release"])
         transitions.append("uploaded")
         publish_state(ftp, target, record_name(release), uploaded)
