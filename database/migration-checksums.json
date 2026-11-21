@@ -11,5 +11,5 @@
   "010_order_lifecycle.sql": "6b8bda54f01669104f3bad0f8dcadedfa0e4f9f280c7d520963c0b278b005d7f",
   "011_website_stripe_reconciliation.sql": "28cb172e7587a2a0d0fa04af4296db235d0ab543a9339a9b08c37c9e6ca43e93",
   "012_caller_events.sql": "ee8fa94600ced8b9065e8955e78fab8d28f47bd6557055de2acc9edd96af4d52",
-  "013_caller_lifecycle.sql": "8c3d24fab756fde9668ea9c80a49059884a6364b0ad408755f0ec4b01abfd3b2"
+  "013_caller_lifecycle.sql": "055db6fd5b17104d41c77bd4258c384db1bb35200fccf2fd9b74166ab0775bb1"
 }

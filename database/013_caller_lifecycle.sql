@@ -9,8 +9,10 @@ IF COL_LENGTH(N'dbo.CallerEvents', N'CallId') IS NULL
 IF COL_LENGTH(N'dbo.CallerEvents', N'CallStatus') IS NULL
     ALTER TABLE dbo.CallerEvents ADD CallStatus nvarchar(16) NULL;
 
-UPDATE dbo.CallerEvents SET CallId = EventId, CallStatus = N'ringing'
-WHERE CallId IS NULL OR CallStatus IS NULL;
+EXEC sys.sp_executesql N'
+    UPDATE dbo.CallerEvents SET CallId = EventId, CallStatus = N''ringing''
+    WHERE CallId IS NULL OR CallStatus IS NULL;
+';
 
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.CallerEvents') AND name = N'IX_CallerEvents_CallId_Sequence')
-    CREATE INDEX IX_CallerEvents_CallId_Sequence ON dbo.CallerEvents(CallId, Sequence DESC);
+    EXEC sys.sp_executesql N'CREATE INDEX IX_CallerEvents_CallId_Sequence ON dbo.CallerEvents(CallId, Sequence DESC)';
