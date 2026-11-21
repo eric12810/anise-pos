@@ -12,23 +12,41 @@ public sealed class CallerEventStore(IConfiguration configuration)
     {
         await using var connection = OpenConnection();
         await connection.OpenAsync(ct);
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(IsolationLevel.Serializable, ct);
+        await using var previous = connection.CreateCommand();
+        previous.Transaction = transaction;
+        previous.CommandText = "SELECT TOP (1) CallStatus FROM dbo.CallerEvents WITH (UPDLOCK, HOLDLOCK) WHERE CallId = @callId ORDER BY Sequence DESC";
+        previous.Parameters.Add("@callId", SqlDbType.UniqueIdentifier).Value = item.CallId;
+        var prior = (string?)await previous.ExecuteScalarAsync(ct);
+        if (!CanTransition(prior, item.CallStatus)) return false;
         await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = """
-            INSERT INTO dbo.CallerEvents (EventId, EventAtUtc, ReceivedAtUtc, Phone, CustomerId, CustomerName)
-            VALUES (@eventId, @eventAt, SYSUTCDATETIME(), @phone, @customerId, @customerName)
+            INSERT INTO dbo.CallerEvents (EventId, CallId, CallStatus, EventAtUtc, ReceivedAtUtc, Phone, CustomerId, CustomerName)
+            VALUES (@eventId, @callId, @status, @eventAt, SYSUTCDATETIME(), @phone, @customerId, @customerName)
             """;
         command.Parameters.Add("@eventId", SqlDbType.UniqueIdentifier).Value = item.EventId;
+        command.Parameters.Add("@callId", SqlDbType.UniqueIdentifier).Value = item.CallId;
+        command.Parameters.Add("@status", SqlDbType.NVarChar, 16).Value = item.CallStatus;
         command.Parameters.Add("@eventAt", SqlDbType.DateTimeOffset).Value = item.Timestamp;
         command.Parameters.Add("@phone", SqlDbType.NVarChar, 21).Value = (object?)item.CallerNumber ?? DBNull.Value;
         command.Parameters.Add("@customerId", SqlDbType.UniqueIdentifier).Value = (object?)item.CustomerId ?? DBNull.Value;
         command.Parameters.Add("@customerName", SqlDbType.NVarChar, 160).Value = (object?)item.CustomerName ?? DBNull.Value;
         try { await command.ExecuteNonQueryAsync(ct); }
         catch (SqlException ex) when (ex.Number is 2601 or 2627) { return false; }
+        await transaction.CommitAsync(ct);
         await using var cleanup = connection.CreateCommand();
-        cleanup.CommandText = "DELETE FROM dbo.CallerEvents WHERE ReceivedAtUtc < DATEADD(minute, -10, SYSUTCDATETIME())";
+        cleanup.CommandText = "DELETE FROM dbo.CallerEvents WHERE ReceivedAtUtc < DATEADD(hour, -4, SYSUTCDATETIME())";
         await cleanup.ExecuteNonQueryAsync(ct);
         return true;
     }
+
+    public static bool CanTransition(string? previous, string next) => (previous, next) switch
+    {
+        (null, "ringing") or ("ringing", "answered") or ("ringing", "missed") or
+        ("answered", "ended") => true,
+        _ => false
+    };
 
     public async Task<long> LatestSequenceAsync(CancellationToken ct)
     {
@@ -45,7 +63,7 @@ public sealed class CallerEventStore(IConfiguration configuration)
         await connection.OpenAsync(ct);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT TOP (100) Sequence, EventId, EventAtUtc, Phone, CustomerId, CustomerName
+            SELECT TOP (100) Sequence, EventId, EventAtUtc, Phone, CustomerId, CustomerName, CallId, CallStatus
             FROM dbo.CallerEvents
             WHERE Sequence > @sequence AND ReceivedAtUtc >= DATEADD(minute, -10, SYSUTCDATETIME())
             ORDER BY Sequence
@@ -58,7 +76,9 @@ public sealed class CallerEventStore(IConfiguration configuration)
                 reader.GetGuid(1), reader.GetDateTimeOffset(2),
                 reader.IsDBNull(3) ? null : reader.GetString(3),
                 reader.IsDBNull(4) ? null : reader.GetGuid(4),
-                reader.IsDBNull(5) ? null : reader.GetString(5))));
+                reader.IsDBNull(5) ? null : reader.GetString(5),
+                reader.IsDBNull(6) ? reader.GetGuid(1) : reader.GetGuid(6),
+                reader.IsDBNull(7) ? "ringing" : reader.GetString(7))));
         return events;
     }
 
@@ -67,7 +87,7 @@ public sealed class CallerEventStore(IConfiguration configuration)
         await using var connection = OpenConnection();
         await connection.OpenAsync(ct);
         await using var command = connection.CreateCommand();
-        command.CommandText = "DELETE FROM dbo.CallerEvents WHERE ReceivedAtUtc < DATEADD(minute, -10, SYSUTCDATETIME())";
+        command.CommandText = "DELETE FROM dbo.CallerEvents WHERE ReceivedAtUtc < DATEADD(hour, -4, SYSUTCDATETIME())";
         await command.ExecuteNonQueryAsync(ct);
     }
 }

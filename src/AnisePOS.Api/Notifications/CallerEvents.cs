@@ -6,8 +6,8 @@ using Microsoft.EntityFrameworkCore;
 
 namespace AnisePOS.Api.Notifications;
 
-public sealed record IncomingCallerEvent(Guid EventId, string? CallerNumber, DateTimeOffset Timestamp, string EventType);
-public sealed record CallerNotification(Guid EventId, DateTimeOffset Timestamp, string? CallerNumber, Guid? CustomerId, string? CustomerName);
+public sealed record IncomingCallerEvent(Guid EventId, string? CallerNumber, DateTimeOffset Timestamp, string EventType, Guid? CallId = null);
+public sealed record CallerNotification(Guid EventId, DateTimeOffset Timestamp, string? CallerNumber, Guid? CustomerId, string? CustomerName, Guid CallId, string CallStatus);
 
 public static class CallerEventEndpoints
 {
@@ -33,7 +33,8 @@ public static class CallerEventEndpoints
     }
 
     public static bool Valid(IncomingCallerEvent? value, DateTimeOffset now) => value is not null &&
-        value.EventId != Guid.Empty && value.EventType == "incoming/ringing" &&
+        value.EventId != Guid.Empty && (value.EventType == "incoming/ringing" ||
+            (value.CallId is not null && value.CallId != Guid.Empty && value.EventType is "incoming/answered" or "incoming/ended" or "incoming/missed")) &&
         value.Timestamp >= now.AddMinutes(-2) && value.Timestamp <= now.AddSeconds(30) &&
         (value.CallerNumber is null || value.CallerNumber.Length <= 30) &&
         (value.CallerNumber is null || value.CallerNumber.Equals("Withheld", StringComparison.OrdinalIgnoreCase) ||
@@ -76,6 +77,8 @@ public static class CallerEventEndpoints
             var now = DateTimeOffset.UtcNow;
             if (!Valid(request, now)) return Results.BadRequest(new { message = "Invalid caller event." });
             var callerEvent = request!;
+            var callId = callerEvent.CallId ?? callerEvent.EventId;
+            var status = callerEvent.EventType[9..];
             var phone = NormalizePhone(callerEvent.CallerNumber);
             Guid? customerId = null;
             string? customerName = null;
@@ -94,7 +97,7 @@ public static class CallerEventEndpoints
                     customerName = string.Join(" ", new[] { match.FirstName, match.LastName }.Where(x => !string.IsNullOrWhiteSpace(x)));
                 }
             }
-            if (!await store.InsertAsync(new CallerNotification(callerEvent.EventId, callerEvent.Timestamp, phone, customerId, customerName), ct))
+            if (!await store.InsertAsync(new CallerNotification(callerEvent.EventId, callerEvent.Timestamp, phone, customerId, customerName, callId, status), ct))
                 return Results.Ok(new { accepted = true, duplicate = true });
             return Results.Accepted(value: new { accepted = true, duplicate = false });
         }).RequireRateLimiting("caller-events").DisableAntiforgery();

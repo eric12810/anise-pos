@@ -27,17 +27,30 @@ if (!CallerEventEndpoints.Authorized(new string('s', 40), new string('s', 40)) |
     CallerEventEndpoints.FindCustomer(new[] { new Customer { Phone = "07123456789" }, new Customer { Phone = "02079460123" } }, "07123456789", c => c.Phone)?.Phone != "07123456789" ||
     CallerEventEndpoints.FindCustomer(new[] { new Customer { Phone = "02079460123" } }, "07123456789", c => c.Phone) is not null ||
     !CallerEventEndpoints.Valid(new(callerId, "Withheld", callerNow, "incoming/ringing"), callerNow) ||
+    !CallerEventEndpoints.Valid(new(Guid.NewGuid(), "Withheld", callerNow, "incoming/answered", callerId), callerNow) ||
+    CallerEventEndpoints.Valid(new(Guid.NewGuid(), "Withheld", callerNow, "incoming/answered"), callerNow) ||
     CallerEventEndpoints.Valid(new(callerId, "07123456789", callerNow.AddMinutes(-3), "incoming/ringing"), callerNow))
     throw new Exception("Caller authentication, telephone or timestamp checks failed.");
 Console.WriteLine("Passed caller event authentication, customer lookup, telephone and timestamp checks.");
 using (var streamPayload = JsonDocument.Parse(CallerEventEndpoints.SerializeStreamNotification(
-    new CallerNotification(callerId, callerNow, "07123456789", null, null))))
+    new CallerNotification(callerId, callerNow, "07123456789", null, null, callerId, "ringing"))))
 {
     if (streamPayload.RootElement.GetProperty("eventId").GetGuid() != callerId ||
         streamPayload.RootElement.GetProperty("callerNumber").GetString() != "07123456789")
         throw new Exception("Caller stream payload must use browser-compatible JSON names.");
 }
 Console.WriteLine("Passed caller stream JSON compatibility check.");
+if (!CallerEventStore.CanTransition(null, "ringing") ||
+    !CallerEventStore.CanTransition("ringing", "answered") ||
+    !CallerEventStore.CanTransition("ringing", "missed") ||
+    !CallerEventStore.CanTransition("answered", "ended") ||
+    CallerEventStore.CanTransition("ringing", "ended") ||
+    CallerEventStore.CanTransition("answered", "missed") ||
+    CallerEventStore.CanTransition("ended", "answered") ||
+    CallerEventStore.CanTransition("missed", "ringing") ||
+    CallerEventStore.CanTransition("ringing", "ringing"))
+    throw new Exception("Caller lifecycle transition check failed.");
+Console.WriteLine("Passed caller lifecycle transitions.");
 
 using (var model = new AniseDbContext(new DbContextOptionsBuilder<AniseDbContext>()
            .UseSqlServer("Server=localhost;Database=offline-model-check").Options))

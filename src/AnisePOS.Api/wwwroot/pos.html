@@ -29,7 +29,7 @@
     @media (max-width:800px) { main { grid-template-columns:1fr; height:auto }.menu { min-height:400px; max-height:65vh }.cart { border-left:0; border-top:1px solid var(--line); min-height:520px } }
     @media (max-width:520px) { .menu { grid-template-columns:120px minmax(0,1fr); gap:10px; padding:12px }.category { padding:10px; font-size:14px } #products { grid-template-columns:1fr; gap:8px }.product-image { height:72px } }
   </style>
-<link rel="stylesheet" href="/pos-navigation.css?v=6"><script defer src="/pos-navigation.js?v=7"></script><link rel="manifest" href="/pos.webmanifest"><link rel="apple-touch-icon" href="/pos-icon.png"><meta name="theme-color" content="#2c6447"></head>
+<link rel="stylesheet" href="/pos-navigation.css?v=6"><script defer src="/pos-navigation.js?v=8"></script><link rel="manifest" href="/pos.webmanifest"><link rel="apple-touch-icon" href="/pos-icon.png"><meta name="theme-color" content="#2c6447"></head>
 <body class="pos-screen">
   <header class="pos-header"><h1>Anise POS</h1><nav class="pos-navigation" aria-label="POS navigation"><a href="/pos.html">POS</a><a href="/orders.html">Order queue</a><a href="/history.html">Order history</a><a href="/menu-admin.html" data-roles="Owner,Manager" hidden>Menu manager</a><a href="/reports.html" data-roles="Owner,Manager" hidden>Reports</a><a id="website-settings-link" href="/website-settings.html" data-roles="Owner,Manager" hidden>Settings</a><a href="/staff-admin.html" data-roles="Owner" hidden>Staff</a></nav><span id="staff">Checking staff session…</span></header>
   <main><section class="menu"><nav class="categories" id="categories" aria-label="Menu categories"></nav><div id="products"></div></section>

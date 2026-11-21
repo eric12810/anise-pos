@@ -19,9 +19,11 @@
     } catch { /* Keep visible cards in memory if storage is unavailable. */ }
   };
   const dismiss = id => {
-    dismissed.add(id);
     const index = cards.findIndex(card => card.eventId === id);
-    if (index !== -1) cards.splice(index, 1);
+    if (index !== -1) {
+      dismissed.add(cards[index].callId || id);
+      cards.splice(index, 1);
+    }
     persist(); render();
   };
   function line(parent, label, value) {
@@ -37,6 +39,7 @@
       const heading = document.createElement('strong'); heading.textContent = 'Incoming call · ' + (card.callerNumber || 'Withheld / unavailable');
       item.append(heading);
       line(item, '', card.name);
+      line(item, 'Call: ', {ringing:'Ringing',answered:'Answered',ended:'Ended',missed:'Missed'}[card.callStatus] || 'Ringing');
       line(item, 'Status: ', card.callerNumber ? (card.existing ? 'Existing customer' : card.known ? 'New customer' : 'Checking customer…') : 'Number unavailable');
       line(item, 'Address: ', card.address);
       line(item, 'Last order: ', card.lastOrder && new Date(card.lastOrder).toLocaleDateString('en-GB'));
@@ -70,12 +73,24 @@
     // Existing staging workers may emit PascalCase during a rolling deployment.
     if (!notification.eventId && notification.EventId) notification = {
       eventId:notification.EventId, timestamp:notification.Timestamp, callerNumber:notification.CallerNumber,
-      customerId:notification.CustomerId, customerName:notification.CustomerName
+      customerId:notification.CustomerId, customerName:notification.CustomerName,
+      callId:notification.CallId, callStatus:notification.CallStatus
     };
     const id = notification.eventId;
-    if (!id || dismissed.has(id) || cards.some(card => card.eventId === id)) { persist(); return; }
+    const callId = notification.callId || id;
+    if (!id || dismissed.has(callId) || dismissed.has(id)) { persist(); return; }
+    const existing = cards.find(card => (card.callId || card.eventId) === callId);
+    if (existing) {
+      const rank = {ringing:0,answered:1,ended:2,missed:2};
+      const next = notification.callStatus || 'ringing';
+      if ((rank[next] ?? -1) > (rank[existing.callStatus || 'ringing'] ?? 0)) {
+        existing.callStatus = next; persist(); render();
+      }
+      return;
+    }
+    if ((notification.callStatus || 'ringing') !== 'ringing') { persist(); return; }
     const card = {eventId:id, timestamp:notification.timestamp, callerNumber:notification.callerNumber,
-      name:notification.customerName || null, existing:!!notification.customerId, known:!!notification.customerId};
+      callId, callStatus:'ringing', name:notification.customerName || null, existing:!!notification.customerId, known:!!notification.customerId};
     cards.push(card); persist(); render(); enrich(card);
   }
   window.addEventListener('anise-caller-order-opened', event => dismiss(event.detail.eventId));
