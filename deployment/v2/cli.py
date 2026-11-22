@@ -11,7 +11,7 @@ import zipfile
 from .engine import backup_current, backup_legacy, deploy, deploy_initial, rollback, seed, disposable_ftps_probe
 from .model import Target, package, parse_state
 from .preflight import validate_evidence
-from .transport import CurlFTPS
+from .transport import CurlFTPS, SafeFTPSFailure
 
 def target_from_env(name):
     prefix = "V2_" + name.upper() + "_"
@@ -153,5 +153,5 @@ if __name__ == "__main__":
             # Preflight validators return fixed, non-secret failure descriptions.
             print("V2 preflight stopped:", str(error), file=sys.stderr)
         else:
-            print("V2 stopped safely:", type(error).__name__, file=sys.stderr)
+            print("V2 stopped safely:", str(error) if isinstance(error, SafeFTPSFailure) else type(error).__name__, file=sys.stderr)
         raise SystemExit(1)

@@ -305,6 +305,7 @@ def deploy(ftp, target, root, release, *, verified_backup=None, health_check=hea
     verified_put(ftp, OFFLINE, marker)
     try:
         sleeper(15)
+        print("PRODUCTION stage: installing managed files", flush=True)
         known_dirs = {str(PurePosixPath(name).parent) for name in current["files"]}
         install_files(ftp, target, root, files, current["files"], known_dirs=known_dirs)
         uploaded = state_bytes(target, release, artifact, "uploaded", files, current["release"])
