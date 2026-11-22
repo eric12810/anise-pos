@@ -667,6 +667,13 @@ class V2Tests(unittest.TestCase):
         self.assertIn("multicwd", args[0])
         self.assertNotIn("private-password", " ".join(args[0]))
         self.assertIn(b"private-password", kwargs["input"])
+        with mock.patch.object(transport.subprocess, "run") as failed:
+            failed.return_value.returncode = 28
+            failed.return_value.stderr = b"secret server detail"
+            with self.assertRaisesRegex(transport.SafeFTPSFailure, r"FTPS upload failed \(curl exit 28\)") as error:
+                ftp._run("/wwwroot/AnisePOS.Api.dll", upload="/tmp/payload")
+        self.assertNotIn("secret server detail", str(error.exception))
+        self.assertNotIn("private-password", str(error.exception))
 
 
 if __name__ == "__main__":

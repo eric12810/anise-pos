@@ -6,6 +6,10 @@ import time
 from urllib.parse import quote
 
 
+class SafeFTPSFailure(RuntimeError):
+    """Error text contains only the operation and curl exit code."""
+
+
 class CurlFTPS:
     def __init__(self, target, password):
         target.validate()
@@ -48,7 +52,7 @@ class CurlFTPS:
             self.stats[kind][1] += time.monotonic() - started
         if result.returncode:
             # curl/server output can contain hosting details or credentials.
-            raise RuntimeError("FTPS operation failed (curl exit " + str(result.returncode) + ")")
+            raise SafeFTPSFailure("FTPS " + kind + " failed (curl exit " + str(result.returncode) + ")")
         return result.stdout
 
     def timing_summary(self):
