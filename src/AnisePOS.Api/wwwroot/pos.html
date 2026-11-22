@@ -100,7 +100,10 @@
       const amount = document.querySelector('#total').textContent.replace(/[£,]/g, '');
       const status = document.querySelector('#copy-status');
       const useStripeShortcut = state.type === 'Delivery' && state.payment === 'Stripe';
-      const stripeWindow = useStripeShortcut ? window.open('https://dashboard.stripe.com/login', '_blank', 'noopener,noreferrer') : null;
+      const stripeUrl = location.hostname === 'pos.loveanise.co.uk'
+        ? 'https://dashboard.stripe.com/acct_1FxYIUFD58T4nLxx/payments/new'
+        : 'https://dashboard.stripe.com/acct_1FxYIUFD58T4nLxx/test/payments/new';
+      const stripeWindow = useStripeShortcut ? window.open(stripeUrl, '_blank', 'noopener,noreferrer') : null;
       try {
         if (navigator.clipboard?.writeText) {
           await navigator.clipboard.writeText(amount);
