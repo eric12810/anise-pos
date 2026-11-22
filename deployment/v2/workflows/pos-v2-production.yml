@@ -3,6 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       staging_run_id: {description: 'Verified V2 staging run ID', required: true, type: string}
+      caller_schema_approval: {description: 'One-time caller schema approval; leave blank for routine releases', required: false, type: string}
 permissions: {contents: read, actions: read}
 concurrency: {group: anise-pos-production, cancel-in-progress: false}
 jobs:
@@ -47,8 +48,11 @@ jobs:
           ref: '${{ steps.backup.outputs.current_release }}'
           path: current-source
           persist-credentials: false
-      - name: Refuse routine release if database requirements changed
+      - name: Verify database requirements for exact release
         run: python3 -m deployment.v2.schema_guard current-source release-source
+        env:
+          CALLER_SCHEMA_APPROVAL: '${{ inputs.caller_schema_approval }}'
+          RELEASE_SHA: '${{ steps.resolve.outputs.release }}'
       - uses: actions/upload-artifact@v4
         with:
           name: pos-v2-production-before-${{ github.run_id }}

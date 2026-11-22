@@ -588,6 +588,25 @@ class V2Tests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Database requirements changed"):
                 schema_guard.check(current, candidate)
 
+    def test_caller_schema_release_requires_exact_approval_artifact_and_changes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            current, candidate = Path(folder) / "current", Path(folder) / "candidate"
+            for root in (current, candidate):
+                (root / "src/AnisePOS.Api").mkdir(parents=True)
+                (root / "database").mkdir()
+                (root / "src/AnisePOS.Api/Program.cs").write_text("old")
+            (candidate / "src/AnisePOS.Api/Program.cs").write_text("new")
+            for name in ("012_caller_events.sql", "013_caller_lifecycle.sql"):
+                (candidate / "database" / name).write_text("CREATE TABLE")
+            approval, release = schema_guard.CALLER_APPROVAL, schema_guard.CALLER_RELEASE
+            self.assertTrue(schema_guard.check(current, candidate, approval, release))
+            for bad_approval, bad_release in (("", release), (approval, "0" * 40)):
+                with self.assertRaisesRegex(ValueError, "Database requirements changed"):
+                    schema_guard.check(current, candidate, bad_approval, bad_release)
+            (candidate / "database/014_unrelated.sql").write_text("ALTER TABLE")
+            with self.assertRaisesRegex(ValueError, "Database requirements changed"):
+                schema_guard.check(current, candidate, approval, release)
+
     def test_protected_manual_snapshot_expansion_is_bounded_and_private(self):
         raw = b'{"database":"anisedatabase","columns":[]}'
         encoded = base64.b64encode(zlib.compress(raw)).decode()
