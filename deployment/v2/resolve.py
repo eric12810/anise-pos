@@ -4,6 +4,11 @@ import os
 import urllib.request
 
 
+def accepted_branch(run):
+    branch = run.get("head_branch")
+    return branch == "staging" or (branch == "release/push-notifications" and run.get("event") == "workflow_dispatch")
+
+
 def main():
     repo = os.environ["GITHUB_REPOSITORY"]
     run_id = os.environ["STAGING_RUN_ID"]
@@ -20,7 +25,8 @@ def main():
     run = get("/actions/runs/" + run_id)
     workflow = get("/actions/workflows/" + str(run.get("workflow_id")))
     jobs = get("/actions/runs/" + run_id + "/jobs?per_page=100").get("jobs", [])
-    if (run.get("repository", {}).get("full_name") != repo or run.get("head_branch") != "staging"
+    if (run.get("repository", {}).get("full_name") != repo
+            or not accepted_branch(run)
             or run.get("status") != "completed" or run.get("conclusion") != "success"
             or workflow.get("path") != ".github/workflows/pos-v2-staging.yml"
             or not any(j.get("name") == "Deploy and verify staging" and j.get("conclusion") == "success" for j in jobs)):

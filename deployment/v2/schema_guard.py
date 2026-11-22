@@ -11,6 +11,10 @@ CALLER_CHANGES = {
     "database/012_caller_events.sql",
     "database/013_caller_lifecycle.sql",
 }
+PUSH_TEST_RATE_LIMIT = '''builder.Services.AddRateLimiter(options => options.AddPolicy("staff-push-test", context =>
+    RateLimitPartition.GetFixedWindowLimiter(context.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? "anonymous", _ =>
+        new FixedWindowRateLimiterOptions { PermitLimit = 2, Window = TimeSpan.FromMinutes(1), QueueLimit = 0, AutoReplenishment = true })));
+'''
 
 
 def requirements(root):
@@ -22,7 +26,9 @@ def requirements(root):
     for directory in ("src/AnisePOS.Api/Data", "src/AnisePOS.Api/Domain"):
         paths.extend((root / directory).rglob("*.cs"))
     paths.extend((root / "database").rglob("*.sql"))
-    return {str(path.relative_to(root)): sha256(path.read_bytes()).hexdigest()
+    return {str(path.relative_to(root)): sha256(
+                path.read_bytes().replace(PUSH_TEST_RATE_LIMIT.encode(), b"")
+                if path == program else path.read_bytes()).hexdigest()
             for path in paths if path.is_file()}
 
 

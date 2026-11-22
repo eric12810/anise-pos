@@ -83,6 +83,39 @@ public static class StaffPushEndpoints
             var hash = Hash(request.Endpoint); var staffId = user.FindFirstValue(ClaimTypes.NameIdentifier);
             await db.StaffPushSubscriptions.Where(x => x.EndpointHash == hash && x.StaffId == staffId).ExecuteDeleteAsync(ct); return Results.Ok();
         });
+        group.MapPost("/test", async (StaffPushRegistration? request, int? delaySeconds, ClaimsPrincipal user, AniseDbContext db, IDataProtectionProvider protection, PushKeyStore keys, ILogger<StaffPushWorker> logger, CancellationToken ct) =>
+        {
+            if (delaySeconds is not null and not 10) return Results.BadRequest(new { message = "Invalid test delay." });
+            var staffId = user.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (staffId is null || request?.Keys is null || !ValidEndpoint(request.Endpoint)) return Results.BadRequest(new { message = "Invalid device subscription." });
+            var row = await db.StaffPushSubscriptions.AsNoTracking().SingleOrDefaultAsync(x => x.EndpointHash == Hash(request.Endpoint) && x.StaffId == staffId, ct);
+            if (row is null) return Results.Conflict(new { message = "This device is no longer registered. Enable notifications again." });
+            try
+            {
+                var saved = JsonSerializer.Deserialize<StaffPushRegistration>(protection.CreateProtector("Anise.StaffPush.Subscription.v1").Unprotect(row.ProtectedSubscription));
+                if (saved?.Keys is null || saved.Endpoint != request.Endpoint || saved.Keys != request.Keys) return Results.Conflict(new { message = "This device's subscription changed. Enable notifications again." });
+                // Keep the server-side timer and delivery alive if iOS suspends the locked web app.
+                if (delaySeconds == 10) await Task.Delay(TimeSpan.FromSeconds(10));
+                var deliveryToken = delaySeconds == 10 ? CancellationToken.None : ct;
+                using var handler = new HttpClientHandler { AllowAutoRedirect = false };
+                using var http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(12) };
+                using var client = new WebPushClient(http);
+                var payload = JsonSerializer.Serialize(new { title = "Anise POS — Test Notification", body = "Notifications are working on this device.", tag = "anise-push-test-" + Guid.NewGuid().ToString("N") });
+                await client.SendNotificationAsync(new PushSubscription(saved.Endpoint, saved.Keys.P256dh, saved.Keys.Auth), payload, new Dictionary<string, object> { ["vapidDetails"] = keys.Get(), ["TTL"] = 300 }, deliveryToken);
+                logger.LogInformation("Staff push test accepted by push service (delayed: {Delayed})", delaySeconds == 10);
+                return Results.Ok(new { accepted = true, message = "Push service accepted the test. Confirm it appears on this device." });
+            }
+            catch (WebPushException ex) when (ex.StatusCode is HttpStatusCode.Gone or HttpStatusCode.NotFound)
+            {
+                await db.StaffPushSubscriptions.Where(x => x.Id == row.Id).ExecuteDeleteAsync(delaySeconds == 10 ? CancellationToken.None : ct);
+                return Results.Conflict(new { message = "The push service expired this device. Enable notifications again." });
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+            {
+                logger.LogWarning("Staff push test failed ({ErrorType})", ex.GetType().Name);
+                return Results.Json(new { message = "Push delivery failed. Check the server push configuration and try again." }, statusCode: 502);
+            }
+        }).RequireRateLimiting("staff-push-test");
     }
 }
 
@@ -114,7 +147,7 @@ public sealed class StaffPushWorker(IServiceScopeFactory scopes, PushKeyStore ke
                 o.Payments.Any(p => p.Provider == "WebsiteCash" || p.Provider == "StripeCheckout") &&
                 !db.StaffPushDeliveries.Any(d => d.SubscriptionId == sub.Id && d.OrderId == o.Id)).Select(o => o.Id).Take(30).ToListAsync(ct);
             foreach (var id in missing) db.StaffPushDeliveries.Add(new StaffPushDelivery { SubscriptionId = sub.Id, OrderId = id });
-            try { await db.SaveChangesAsync(ct); } catch (DbUpdateException) { db.ChangeTracker.Clear(); }
+            try { await db.SaveChangesAsync(ct); } catch (DbUpdateException ex) { logger.LogWarning("Staff push delivery scheduling conflict ({ErrorType})", ex.GetType().Name); db.ChangeTracker.Clear(); }
         }
         var deliveries = await db.StaffPushDeliveries.AsNoTracking().Where(x => x.State == "Pending" && (x.NextAttemptAtUtc == null || x.NextAttemptAtUtc <= now) && x.CreatedAtUtc >= now.AddDays(-1)).OrderBy(x => x.CreatedAtUtc).Take(30).ToListAsync(ct);
         using var handler = new HttpClientHandler { AllowAutoRedirect = false };
@@ -139,13 +172,14 @@ public sealed class StaffPushWorker(IServiceScopeFactory scopes, PushKeyStore ke
             }
             catch (WebPushException ex) when (ex.StatusCode is HttpStatusCode.Gone or HttpStatusCode.NotFound)
             {
+                logger.LogWarning("Staff push subscription expired (HTTP {StatusCode})", (int)ex.StatusCode);
                 await db.StaffPushSubscriptions.Where(x => x.Id == item.SubscriptionId).ExecuteDeleteAsync(ct);
                 await db.StaffPushDeliveries.Where(x => x.Id == item.Id).ExecuteUpdateAsync(x => x.SetProperty(y => y.State, "Expired"), ct);
             }
             catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
             {
                 logger.LogWarning("Staff push delivery failed ({ErrorType})", ex.GetType().Name);
-                await db.StaffPushDeliveries.Where(x => x.Id == item.Id).ExecuteUpdateAsync(x => x.SetProperty(y => y.Attempts, y => y.Attempts + 1).SetProperty(y => y.State, item.Attempts >= 5 ? "Failed" : "Pending").SetProperty(y => y.NextAttemptAtUtc, DateTimeOffset.UtcNow.AddMinutes(1)).SetProperty(y => y.UpdatedAtUtc, DateTimeOffset.UtcNow), ct);
+                await db.StaffPushDeliveries.Where(x => x.Id == item.Id).ExecuteUpdateAsync(x => x.SetProperty(y => y.Attempts, y => y.Attempts + 1).SetProperty(y => y.State, item.Attempts >= 4 ? "Failed" : "Pending").SetProperty(y => y.NextAttemptAtUtc, DateTimeOffset.UtcNow.AddMinutes(1)).SetProperty(y => y.UpdatedAtUtc, DateTimeOffset.UtcNow), ct);
             }
         }
         await db.StaffPushDeliveries.Where(x => x.CreatedAtUtc < now.AddDays(-7)).ExecuteDeleteAsync(ct);

@@ -11,7 +11,7 @@ import unittest
 from unittest import mock
 from zipfile import ZipFile
 
-from deployment.v2 import cli, engine, model, preflight, transport, manual_sql, load_manual_snapshot, schema_guard
+from deployment.v2 import cli, engine, model, preflight, transport, manual_sql, load_manual_snapshot, schema_guard, resolve
 
 TARGET = model.Target("staging", "wsuk32.pronameserver.com", "stageposftp", "/stageposftp/wwwroot",
                       "https://pos-staging.loveanise.co.uk", "anisedb")
@@ -576,6 +576,12 @@ class V2Tests(unittest.TestCase):
         self.assertNotIn("PREFLIGHT_EVIDENCE", workflow)
         self.assertIn("schema_guard", workflow)
 
+    def test_release_candidate_requires_manual_staging_run(self):
+        self.assertTrue(resolve.accepted_branch({"head_branch": "staging", "event": "push"}))
+        self.assertTrue(resolve.accepted_branch({"head_branch": "release/push-notifications", "event": "workflow_dispatch"}))
+        self.assertFalse(resolve.accepted_branch({"head_branch": "release/push-notifications", "event": "push"}))
+        self.assertFalse(resolve.accepted_branch({"head_branch": "other", "event": "workflow_dispatch"}))
+
     def test_schema_guard_blocks_runtime_database_changes(self):
         with tempfile.TemporaryDirectory() as folder:
             current, candidate = Path(folder) / "current", Path(folder) / "candidate"
@@ -583,6 +589,8 @@ class V2Tests(unittest.TestCase):
                 (root / "src/AnisePOS.Api/Data").mkdir(parents=True)
                 (root / "src/AnisePOS.Api/Program.cs").write_text("startup")
                 (root / "src/AnisePOS.Api/Data/AniseDbContext.cs").write_text("mapping")
+            self.assertTrue(schema_guard.check(current, candidate))
+            (candidate / "src/AnisePOS.Api/Program.cs").write_text("startup" + schema_guard.PUSH_TEST_RATE_LIMIT)
             self.assertTrue(schema_guard.check(current, candidate))
             (candidate / "src/AnisePOS.Api/Program.cs").write_text("ALTER TABLE")
             with self.assertRaisesRegex(ValueError, "Database requirements changed"):

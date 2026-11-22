@@ -11,55 +11,103 @@
   if (window.ResizeObserver) new ResizeObserver(measure).observe(area);
   else window.addEventListener('resize', measure);
   measure();
-  const banner = area.querySelector('.pos-alert-status'), button = document.querySelector('.pos-push-toggle'), status = document.querySelector('.pos-push-message');
+  const banner = area.querySelector('.pos-alert-status'), button = document.querySelector('.pos-push-toggle'), testButton = document.querySelector('.pos-push-test'), delayedButton = document.querySelector('.pos-push-test-delayed'), deviceStatus = document.querySelector('.pos-push-device-status'), status = document.querySelector('.pos-push-message');
   let worker = null, audio = null, waiting = false;
   function decodeKey(value) {
     const padded = (value + '='.repeat((4 - value.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/');
     return Uint8Array.from(atob(padded), c => c.charCodeAt(0));
   }
   function message(text) { if (status) status.textContent = text; }
+  function state(value, enabled = false) {
+    if (deviceStatus) deviceStatus.textContent = value;
+    if (button) { button.dataset.enabled = String(enabled); button.textContent = enabled ? 'Disable Notifications' : 'Enable Notifications'; }
+    if (testButton) testButton.disabled = !enabled;
+    if (delayedButton) delayedButton.disabled = !enabled;
+  }
+  const supported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window && (!/iPad|iPhone|iPod/.test(navigator.userAgent) || window.navigator.standalone === true);
+  async function post(path, sub) {
+    const response = await fetch('/api/staff/push/' + path, {method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(sub.toJSON())});
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.message || (response.status === 429 ? 'Please wait before sending another test.' : 'Notification request failed. Please try again.'));
+    return result;
+  }
   async function updateSubscriptionButton() {
-    if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return;
+    if (!supported()) { state('Unsupported'); message('On iPhone or iPad, open the POS from its Home Screen icon.'); return; }
+    if (Notification.permission === 'denied') { state('Blocked'); return; }
+    if (Notification.permission !== 'granted') { state('Permission Required'); return; }
     try {
       const existing = await navigator.serviceWorker.getRegistration('/');
       const sub = existing && await existing.pushManager.getSubscription();
       if (sub) {
         worker = existing;
-        const response = await fetch('/api/staff/push/status', {method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(sub.toJSON())});
-        if (response.ok && (await response.json()).enabled) { button.textContent = 'Disable notifications'; button.dataset.enabled = 'true'; }
+        const keyResponse = await fetch('/api/staff/push/key', {credentials:'same-origin',cache:'no-store'});
+        if (!keyResponse.ok) throw new Error('Could not check push configuration. Sign in and try again.');
+        const key = decodeKey((await keyResponse.json()).publicKey);
+        const currentKey = sub.options && sub.options.applicationServerKey;
+        if (!currentKey || Array.from(new Uint8Array(currentKey)).join(',') !== Array.from(key).join(',')) {
+          state('Disabled'); message('This device has an old push key. Tap Enable Notifications to re-register.'); return;
+        }
+        const result = await post('status', sub);
+        if (result.enabled) { state('Enabled', true); return; }
+        message('This device needs re-registration. Tap Enable Notifications.');
       }
-    } catch (_) {}
+      state('Disabled');
+    } catch (error) { state('Disabled'); message(error.message); }
   }
   if (button) button.addEventListener('click', async () => {
-    if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
+    if (!supported()) {
       message('On iPad, open Share → Add to Home Screen, turn on Open as Web App, then open the POS from its icon.'); return;
     }
     button.disabled = true;
     try {
       if (button.dataset.enabled === 'true') {
-        const sub = worker && await worker.pushManager.getSubscription();
+        const registration = worker || await navigator.serviceWorker.getRegistration('/');
+        const sub = registration && await registration.pushManager.getSubscription();
         if (sub) {
-          const response = await fetch('/api/staff/push/unsubscribe', {method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(sub.toJSON())});
-          if (!response.ok) throw new Error('Could not disable notifications. Please try again.');
+          await post('unsubscribe', sub);
           await sub.unsubscribe();
         }
-        button.dataset.enabled = 'false'; button.textContent = 'Enable notifications'; message('Notifications disabled on this device.'); return;
+        state('Disabled'); message('Notifications disabled on this device.'); return;
       }
       // Request permission directly from the tap, as required by iPadOS.
       const permission = await Notification.requestPermission();
-      if (permission !== 'granted') { message('Notifications were not allowed. Check the device notification settings.'); return; }
+      if (permission !== 'granted') { state(permission === 'denied' ? 'Blocked' : 'Permission Required'); message('Notifications were not allowed. Check the device notification settings.'); return; }
       const response = await fetch('/api/staff/push/key', {credentials:'same-origin',cache:'no-store'});
       if (!response.ok) throw new Error('Sign in to enable notifications.');
       const key = await response.json();
       worker = await navigator.serviceWorker.register('/pos-service-worker.js', {scope:'/'});
       await navigator.serviceWorker.ready;
-      const sub = await worker.pushManager.getSubscription() || await worker.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:decodeKey(key.publicKey)});
-      const saved = await fetch('/api/staff/push/subscribe', {method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(sub.toJSON())});
-      if (!saved.ok) throw new Error('Could not save this device. Please try again.');
-      button.dataset.enabled = 'true'; button.textContent = 'Disable notifications'; message('Notifications enabled on this device.');
+      let sub = await worker.pushManager.getSubscription();
+      if (sub) {
+        const currentKey = sub.options && sub.options.applicationServerKey;
+        const expected = decodeKey(key.publicKey);
+        if (!currentKey || Array.from(new Uint8Array(currentKey)).join(',') !== Array.from(expected).join(',')) { await sub.unsubscribe(); sub = null; }
+      }
+      sub = sub || await worker.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:decodeKey(key.publicKey)});
+      await post('subscribe', sub);
+      state('Enabled', true); message('Notifications enabled on this device.');
     } catch (error) { message(error.message || 'Could not enable notifications. Please try again.'); }
     finally { button.disabled = false; }
   });
+  async function sendTest(delayed) {
+    if (testButton) testButton.disabled = true;
+    if (delayedButton) delayedButton.disabled = true;
+    try {
+      const registration = worker || await navigator.serviceWorker.getRegistration('/');
+      const sub = registration && await registration.pushManager.getSubscription();
+      if (!sub) { state('Disabled'); throw new Error('Device subscription is missing. Enable notifications again.'); }
+      if (delayed) message('Test requested. Wait a moment for the request to start, then lock this device. The server sends in 10 seconds.');
+      const result = await post(delayed ? 'test?delaySeconds=10' : 'test', sub);
+      message(result.message);
+    } catch (error) {
+      message(delayed && error instanceof TypeError ? 'Connection closed while the device was locked. Check for the notification; server acceptance could not be confirmed here.' : error.message);
+      if (!delayed) await updateSubscriptionButton();
+    } finally {
+      setTimeout(() => { if (button && button.dataset.enabled === 'true') { if (testButton) testButton.disabled = false; if (delayedButton) delayedButton.disabled = false; } }, 10000);
+    }
+  }
+  if (testButton) testButton.addEventListener('click', () => sendTest(false));
+  if (delayedButton) delayedButton.addEventListener('click', () => sendTest(true));
   if (button) updateSubscriptionButton();
   if (location.pathname === '/orders.html') return;
   const soundScript = document.createElement('script'); soundScript.src = '/order-sounds.js?v=3'; document.head.append(soundScript);

@@ -13,7 +13,7 @@
     .then(staff => {
       if (!staff) return;
       nav.querySelectorAll('[data-roles]').forEach(link => { link.hidden = !link.dataset.roles.split(',').includes(staff.role); });
-      const alerts = document.createElement('script'); alerts.src = '/pos-alerts.js?v=2'; document.head.append(alerts);
+      const alerts = document.createElement('script'); alerts.src = '/pos-alerts.js?v=4'; document.head.append(alerts);
     })
     .catch(() => {});
 })();
