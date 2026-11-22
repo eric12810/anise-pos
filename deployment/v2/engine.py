@@ -362,7 +362,10 @@ def rollback(ftp, target, archive, expected_failed_release, *, health_check=heal
             payloads[name] = data
     added = sorted(set(failed["files"]) - set(healthy_state["files"]))
     for name in added:
-        if sha256(ftp.get(name)).hexdigest() != failed["files"][name]:
+        directory_for(ftp, target, name)
+        if PurePosixPath(name).name not in ftp.list():
+            continue  # Installation may have stopped before this new file was uploaded.
+        if sha256(ftp.get(PurePosixPath(name).name)).hexdigest() != failed["files"][name]:
             raise RuntimeError("Failed-release-only file changed; rollback refused: " + name)
     sleeper(15)
     for name, data in sorted(payloads.items()):
@@ -370,7 +373,8 @@ def rollback(ftp, target, archive, expected_failed_release, *, health_check=heal
         verified_put(ftp, PurePosixPath(name).name, data)
     for name in added:
         directory_for(ftp, target, name)
-        ftp.delete(PurePosixPath(name).name)
+        if PurePosixPath(name).name in ftp.list():
+            ftp.delete(PurePosixPath(name).name)
     ftp.cwd(target.root)
     ftp.delete(OFFLINE)
     try:

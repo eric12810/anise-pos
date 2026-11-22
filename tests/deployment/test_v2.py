@@ -420,6 +420,23 @@ class V2Tests(unittest.TestCase):
         self.assertNotIn("wwwroot/extra.js", ftp.files)
         self.assertEqual(ftp.files["web.config"], b"hosted config")
 
+    def test_rollback_restores_when_new_file_was_never_uploaded(self):
+        ftp = FakeFTP()
+        baseline(ftp, self.root)
+        archive = Path(self.temp.name) / "backup.zip"
+        engine.backup_current(ftp, TARGET, archive)
+        new = artifact(Path(self.temp.name) / "new", b"new")
+        (new / "wwwroot/extra.js").write_bytes(b"new asset")
+        with (new / "release-manifest.sha256").open("a") as manifest:
+            manifest.write(hashlib.sha256(b"new asset").hexdigest() + "  wwwroot/extra.js\n")
+        with self.assertRaises(RuntimeError):
+            engine.deploy(ftp, TARGET, new, NEW,
+                          health_check=lambda _: (_ for _ in ()).throw(RuntimeError("500.30")), sleeper=lambda _: None)
+        del ftp.files["wwwroot/extra.js"]
+        engine.rollback(ftp, TARGET, archive, NEW, health_check=lambda _: None, sleeper=lambda _: None)
+        self.assertNotIn(engine.OFFLINE, ftp.files)
+        self.assertEqual(ftp.files["AnisePOS.Api.dll"], b"old")
+
     def test_production_preflight_requires_independent_evidence_and_backups(self):
         digest = model.package(self.root)[1]
         evidence = dict(checked_at="2026-11-14T18:00:00Z", environment="production", site=PROD.url,
