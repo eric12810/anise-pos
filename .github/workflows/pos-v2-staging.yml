@@ -20,15 +20,15 @@ permissions: {contents: read, actions: read}
 concurrency: {group: anise-pos-staging, cancel-in-progress: false}
 jobs:
   build:
-    if: github.ref == 'refs/heads/staging' && (github.event_name == 'push' || inputs.operation == 'deploy')
+    if: (github.ref == 'refs/heads/staging' && (github.event_name == 'push' || inputs.operation == 'deploy')) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/release/push-notifications')
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
         with: {ref: '${{ github.sha }}'}
       - run: |
-          git fetch --no-tags --depth=1 origin staging
-          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/staging)"
+          git fetch --no-tags --depth=1 origin "$GITHUB_REF_NAME"
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "origin/$GITHUB_REF_NAME")"
       - uses: actions/setup-dotnet@v4
         with: {dotnet-version: '9.0.x'}
       - uses: actions/cache@v4
