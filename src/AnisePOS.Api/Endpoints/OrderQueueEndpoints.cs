@@ -211,8 +211,8 @@ public static class OrderQueueEndpoints
 
         queue.MapPut("/{orderNumber:long}/payment/method", async (long orderNumber, ChangePaymentMethod request, AniseDbContext db, ClaimsPrincipal staff, CancellationToken ct) =>
         {
-            if (request.Method is not PaymentMethod.Cash and not PaymentMethod.Card)
-                return Results.BadRequest(new { message = "Choose Cash or Card." });
+            if (request.Method is not (PaymentMethod.Cash or PaymentMethod.Card or PaymentMethod.SumUp or PaymentMethod.Stripe))
+                return Results.BadRequest(new { message = "Choose Cash, SumUp, Card or Stripe." });
             await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
             var payment = await db.Payments.Include(p => p.Order)
                 .Where(p => p.Order.OrderNumber == orderNumber)

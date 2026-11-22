@@ -116,6 +116,12 @@ if (firstReport.OrderCount != 2 || firstReport.CollectionOrders != 2 || firstRep
     secondReport.CompletedRefunds != 12m || secondReport.PendingRefunds != 8m ||
     secondReport.NetPaidTakings != 13m || secondReport.Days.Single().PaidSales != 25m)
     throw new Exception("Payment, cancelled order, partial refund or trading-day reporting checks failed.");
+var splitReport = ReportEndpoints.Calculate(day1, day2, 0, [],
+    [new(day1, PaymentMethod.Card, 10m), new(day1, PaymentMethod.SumUp, 20m),
+     new(day1, PaymentMethod.Stripe, 30m), new(day1, PaymentMethod.Online, 5m)], []);
+if (splitReport.CardSales != 65m || splitReport.OtherCardSales != 15m ||
+    splitReport.SumUpSales != 20m || splitReport.StripeSales != 30m || splitReport.NetPaidTakings != 65m)
+    throw new Exception("Split card payment reporting checks failed.");
 Console.WriteLine("Passed payment-date, refund-date, cancelled order, partial refund and unpaid-order reporting checks.");
 
 var corsOptions = new CorsOptions();

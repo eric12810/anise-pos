@@ -372,8 +372,8 @@ public static class CommerceEndpoints
         {
             if (request.Lines.Count == 0 || request.Lines.Any(line => line.Quantity < 1))
                 return Results.ValidationProblem(new Dictionary<string, string[]> { ["lines"] = ["An order needs at least one line with a positive quantity."] });
-            if (request.PaymentMethod is not PaymentMethod.Cash and not PaymentMethod.Card)
-                return Results.ValidationProblem(new Dictionary<string, string[]> { ["paymentMethod"] = ["Choose Cash or Card."] });
+            if (request.PaymentMethod is not (PaymentMethod.Cash or PaymentMethod.Card or PaymentMethod.SumUp or PaymentMethod.Stripe))
+                return Results.ValidationProblem(new Dictionary<string, string[]> { ["paymentMethod"] = ["Choose Cash, SumUp, Card or Stripe."] });
             if (!ValidPosEstimate(request.OrderType, request.EstimatedMinutes))
                 return Results.ValidationProblem(new Dictionary<string, string[]> { ["estimatedMinutes"] = ["Choose a valid estimate in 5-minute increments."] });
 

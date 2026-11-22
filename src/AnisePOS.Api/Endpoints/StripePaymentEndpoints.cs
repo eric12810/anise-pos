@@ -250,7 +250,7 @@ public static class StripePaymentEndpoints
                 .OrderByDescending(p => p.CreatedAtUtc).FirstOrDefaultAsync(ct);
             if (payment is null || string.IsNullOrWhiteSpace(payment.ProviderReference))
                 return Results.NotFound(new { message = "No Stripe payment is recorded for this order." });
-            if (payment.Order.OrderType != OrderType.Delivery || payment.Method != PaymentMethod.Card)
+            if (payment.Order.OrderType != OrderType.Delivery || payment.Method is not (PaymentMethod.Card or PaymentMethod.Stripe))
                 return Results.Conflict(new { message = "This order is not a delivery card payment." });
             if (payment.Status == PaymentStatus.Paid) return Results.Ok(new { status = "Paid" });
             if (payment.Status != PaymentStatus.Pending)
@@ -279,6 +279,7 @@ public static class StripePaymentEndpoints
                     return Results.Ok(new { status = "Pending", stripeStatus = status });
                 var now = DateTimeOffset.UtcNow;
                 payment.Status = PaymentStatus.Paid;
+                payment.Method = PaymentMethod.Stripe;
                 payment.PaidAtUtc = now;
                 payment.UpdatedAtUtc = now;
                 db.OrderStatusHistory.Add(new OrderStatusHistory { OrderId = payment.OrderId, Status = payment.Order.Status,

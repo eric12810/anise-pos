@@ -140,10 +140,16 @@ function buildOrderCard(order, id, compact = false) {
                 if (order.paymentStatus === 'Pending' || order.paymentStatus === 'Authorised') {
                     const stripePayment = ['Stripe', 'StripeConfirming', 'StripeCancelled'].includes(order.paymentProvider);
                     if (order.paymentStatus === 'Pending' && (order.paymentProvider === 'WebsiteCash' || (!order.paymentProvider && !order.hasPaymentReference))) {
-                        const method = order.paymentMethod === 'Cash' ? 'Card' : 'Cash';
-                        const change = element('button', 'Change payment', 'payment-action');
-                        change.setAttribute('aria-label', 'Order ' + order.orderNumber + ': change payment to ' + method);
-                        change.addEventListener('click', () => changePaymentMethod(order, method));
+                        const change = document.createElement('select');
+                        change.className = 'payment-action';
+                        change.setAttribute('aria-label', 'Order ' + order.orderNumber + ': change payment method');
+                        for (const method of ['Cash', 'SumUp', 'Card', 'Stripe']) {
+                            const option = document.createElement('option');
+                            option.value = option.textContent = method;
+                            option.selected = method === order.paymentMethod;
+                            change.append(option);
+                        }
+                        change.addEventListener('change', () => changePaymentMethod(order, change.value));
                         receipts.append(change);
                     }
                     if (stripePayment) {

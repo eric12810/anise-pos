@@ -103,7 +103,7 @@ public static class WebsiteStripeWebhook
                             ModifierName = m.ModifierName, PriceAdjustment = m.PriceAdjustment }).ToList() });
                 }
                 var now = DateTimeOffset.UtcNow;
-                order.Payments.Add(new Payment { Method = PaymentMethod.Online, Status = PaymentStatus.Paid,
+                order.Payments.Add(new Payment { Method = PaymentMethod.Stripe, Status = PaymentStatus.Paid,
                     Amount = checkout.Total, Provider = "StripeCheckout", ProviderReference = paid.SessionId, PaidAtUtc = now });
                 order.StatusHistory.Add(new OrderStatusHistory { Status = OrderStatus.Placed, Note = "Website card payment confirmed by Stripe" });
                 db.Orders.Add(order);
