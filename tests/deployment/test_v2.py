@@ -579,7 +579,9 @@ class V2Tests(unittest.TestCase):
     def test_release_candidate_requires_manual_staging_run(self):
         self.assertTrue(resolve.accepted_branch({"head_branch": "staging", "event": "push"}))
         self.assertTrue(resolve.accepted_branch({"head_branch": "release/push-notifications", "event": "workflow_dispatch"}))
+        self.assertTrue(resolve.accepted_branch({"head_branch": "release/push-production-safe", "event": "workflow_dispatch"}))
         self.assertFalse(resolve.accepted_branch({"head_branch": "release/push-notifications", "event": "push"}))
+        self.assertFalse(resolve.accepted_branch({"head_branch": "release/push-production-safe", "event": "push"}))
         self.assertFalse(resolve.accepted_branch({"head_branch": "other", "event": "workflow_dispatch"}))
 
     def test_schema_guard_blocks_runtime_database_changes(self):

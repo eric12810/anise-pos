@@ -6,7 +6,8 @@ import urllib.request
 
 def accepted_branch(run):
     branch = run.get("head_branch")
-    return branch == "staging" or (branch == "release/push-notifications" and run.get("event") == "workflow_dispatch")
+    return branch == "staging" or (branch in {"release/push-notifications", "release/push-production-safe"}
+                                   and run.get("event") == "workflow_dispatch")
 
 
 def main():
