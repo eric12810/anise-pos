@@ -99,7 +99,7 @@
     document.querySelector('#copy-total').onclick = async () => {
       const amount = document.querySelector('#total').textContent.replace(/[£,]/g, '');
       const status = document.querySelector('#copy-status');
-      const useStripeShortcut = state.type === 'Delivery' && state.payment === 'Stripe';
+      const useStripeShortcut = state.type === 'Delivery' && state.payment === 'Card';
       const stripeUrl = location.hostname === 'pos.loveanise.co.uk'
         ? 'https://dashboard.stripe.com/acct_1FxYIUFD58T4nLxx/payments/new'
         : 'https://dashboard.stripe.com/acct_1FxYIUFD58T4nLxx/test/payments/new';
