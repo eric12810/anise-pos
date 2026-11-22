@@ -6,6 +6,13 @@ import sys
 
 CALLER_RELEASE = "0733b67507f85523b48192fff54e17d869bc5955"
 CALLER_APPROVAL = "APPROVE CALLER SCHEMA RELEASE"
+STRIPE_SHORTCUT_RELEASE = "0de2e5734149f5a998feaeb2ce938e4f38de9369"
+STRIPE_SHORTCUT_APPROVAL = "APPROVE POS SHORTCUT RELEASE 0de2e57"
+STRIPE_SHORTCUT_CHANGES = {
+    "database/production/create_caller_events.sql",
+    "database/production/inspect_caller_events.sql",
+    "src/AnisePOS.Api/Domain/Entities.cs",
+}
 CALLER_CHANGES = {
     "src/AnisePOS.Api/Program.cs",
     "database/012_caller_events.sql",
@@ -37,6 +44,8 @@ def check(current, candidate, approval="", release=""):
     changed = sorted(name for name in before.keys() | after.keys()
                      if before.get(name) != after.get(name))
     if changed and approval == CALLER_APPROVAL and release == CALLER_RELEASE and set(changed) == CALLER_CHANGES:
+        return True
+    if changed and approval == STRIPE_SHORTCUT_APPROVAL and release == STRIPE_SHORTCUT_RELEASE and set(changed) == STRIPE_SHORTCUT_CHANGES:
         return True
     if changed:
         raise ValueError("Database requirements changed; use a separately approved schema release: "
