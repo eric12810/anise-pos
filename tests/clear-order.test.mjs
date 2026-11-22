@@ -26,24 +26,40 @@ function setup(confirmed=true,widgetReplaced=false){
   Object.assign(elements['delivery-fee'],{value:'3.00'});
   elements['delivery-fee-override'].checked=true;
   const typeButtons=[{dataset:{type:'Collection'},classList:{toggle(_,active){this.active=active}}},{dataset:{type:'Delivery'},classList:{toggle(_,active){this.active=active}}}];
-  const paymentButtons=[{dataset:{payment:'Cash'},classList:{toggle(_,active){this.active=active}}},{dataset:{payment:'Card'},classList:{toggle(_,active){this.active=active}},setAttribute(name,value){this[name]=value}}];
-  const cardMethods={hidden:false};
+  const paymentButtons=[{dataset:{payment:'Cash'},classList:{toggle(_,active){this.active=active}}},{dataset:{payment:'Card'},classList:{toggle(_,active){this.active=active}}}];
+  const cardDialog={open:true,showModal(){this.open=true},close(){this.open=false}};
+  const cardCancel={};
   const cardOptions=['SumUp','Card','Stripe'].map(payment=>({dataset:{payment},classList:{toggle(_,active){this.active=active}}}));
   const state={cart:[{name:'Tofu'}],type:'Delivery',payment:'Card',deliveryAddress:{postcode:'AB1 2CD',line1:'1 High Street',line2:''}};
   const calls={render:0,estimate:0,postcode:[],quotes:0,confirm:0,fetch:0};
   const context={state,printingDraft:false,placingOrder:false,savingAddress:false,manualPostcode:elements['manual-postcode'],phoneLookupTimer:null,phoneLookupVersion:1,deliveryEditVersion:1,postcodeBlurTimer:null,postcodeSelectionPending:true,routeVersion:1,selectedPlace:{id:'old'},
-    document:{querySelector:selector=>selector==='#card-methods'?cardMethods:selector==='#payments [data-payment="Card"]'?paymentButtons[1]:widgetReplaced&&selector==='#manual-postcode'?null:elements[selector.slice(1)],querySelectorAll:selector=>selector==='#types button'?typeButtons:selector==='#card-methods button'?cardOptions:paymentButtons},
+    document:{querySelector:selector=>selector==='#card-method-dialog'?cardDialog:selector==='#card-method-cancel'?cardCancel:selector==='#payments [data-payment="Card"]'?paymentButtons[1]:selector==='#payments [data-payment="Cash"]'?paymentButtons[0]:widgetReplaced&&selector==='#manual-postcode'?null:elements[selector.slice(1)],querySelectorAll:selector=>selector==='#types button'?typeButtons:selector==='#card-methods button'?cardOptions:paymentButtons},
     window:{confirm:()=>{calls.confirm++;return confirmed}},clearTimeout:()=>{},
     setPostcodeSearchValue:value=>calls.postcode.push(value),invalidateDeliveryQuote:()=>calls.quotes++,
     updateEstimateOptions:()=>calls.estimate++,renderCart:()=>calls.render++,fetch:()=>{calls.fetch++;throw Error('Unexpected request')}
   };
   vm.createContext(context);vm.runInContext(source,context);
-  return {context,state,elements,typeButtons,paymentButtons,cardMethods,cardOptions,calls};
+  return {context,state,elements,typeButtons,paymentButtons,cardDialog,cardCancel,cardOptions,calls};
 }
+
+test('Card opens visible choices and selecting one changes the method without placing an order',()=>{
+  assert.match(pos,/<dialog id="card-method-dialog"/);
+  const choiceHandlers=pos.slice(paymentEnd,pos.indexOf('function splitSavedAddress',paymentEnd));
+  const {context,state,paymentButtons,cardDialog,cardOptions,calls}=setup();
+  cardDialog.open=false;
+  vm.runInContext(choiceHandlers,context);
+  paymentButtons[1].onclick();
+  assert.equal(cardDialog.open,true);
+  cardOptions[0].onclick();
+  assert.equal(state.payment,'SumUp');
+  assert.equal(cardDialog.open,false);
+  assert.equal(paymentButtons[1].textContent,'SumUp');
+  assert.equal(calls.fetch,0);
+});
 
 test('clear button sits next to Current order and resets the in-progress form',()=>{
   assert.match(pos,/<h2>Current order<\/h2><button id="clear-order"/);
-  const {context,state,elements,typeButtons,paymentButtons,cardMethods,calls}=setup();
+  const {context,state,elements,typeButtons,paymentButtons,cardDialog,calls}=setup();
   context.clearCurrentOrder();
   assert.equal(calls.confirm,1);
   assert.equal(state.cart.length,0);
@@ -57,7 +73,7 @@ test('clear button sits next to Current order and resets the in-progress form',(
   assert.equal(elements['delivery-fields'].hidden,true);
   assert.equal(elements['address-results'].hidden,true);
   assert.equal(typeButtons[0].classList.active,true);assert.equal(paymentButtons[0].classList.active,true);
-  assert.equal(cardMethods.hidden,true);assert.equal(paymentButtons[1].textContent,'Card');
+  assert.equal(cardDialog.open,false);assert.equal(paymentButtons[1].textContent,'Card');
   assert.equal(calls.render,1);assert.equal(calls.estimate,1);
   assert.deepEqual(calls.postcode,['']);assert.equal(calls.fetch,0);
   assert.equal(context.phoneLookupVersion,2);assert.equal(context.routeVersion,2);
