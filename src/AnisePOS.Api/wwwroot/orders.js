@@ -31,7 +31,7 @@ const detailStatus = document.querySelector('#order-detail-status');
 const cancelDialog = document.querySelector('#cancel-dialog'), cancelError = document.querySelector('#cancel-error'), cancelConfirm = document.querySelector('#cancel-confirm');
 let cancellingOrder = null;
 document.querySelector('#order-detail-close').addEventListener('click', () => detailDialog.close());
-detailDialog.addEventListener('close', () => { detailContent.replaceChildren(); load(); });
+detailDialog.addEventListener('close', () => { closePaymentDropdown(); detailContent.replaceChildren(); load(); });
 new MutationObserver(() => { if (detailDialog.open) detailStatus.textContent = message.textContent; }).observe(message, {childList: true, characterData: true, subtree: true});
 function closeOrderDetails() { if (detailDialog.open) detailDialog.close(); }
 function deliveryPostcode(address) {
@@ -140,16 +140,14 @@ function buildOrderCard(order, id, compact = false) {
                 if (order.paymentStatus === 'Pending' || order.paymentStatus === 'Authorised') {
                     const stripePayment = ['Stripe', 'StripeConfirming', 'StripeCancelled'].includes(order.paymentProvider);
                     if (order.paymentStatus === 'Pending' && (order.paymentProvider === 'WebsiteCash' || (!order.paymentProvider && !order.hasPaymentReference))) {
-                        const change = document.createElement('select');
-                        change.className = 'payment-action';
+                        const change = element('button', 'Change payment: ' + order.paymentMethod, 'payment-action');
+                        change.type = 'button';
                         change.setAttribute('aria-label', 'Order ' + order.orderNumber + ': change payment method');
-                        for (const method of ['Cash', 'SumUp', 'Card', 'Stripe']) {
-                            const option = document.createElement('option');
-                            option.value = option.textContent = method;
-                            option.selected = method === order.paymentMethod;
-                            change.append(option);
-                        }
-                        change.addEventListener('change', () => changePaymentMethod(order, change.value));
+                        change.setAttribute('aria-haspopup', 'menu');
+                        change.setAttribute('aria-expanded', 'false');
+                        const dropdown = createPaymentDropdown(change, ['Cash', 'SumUp', 'Card', 'Stripe'],
+                            () => order.paymentMethod, method => { if (method !== order.paymentMethod) changePaymentMethod(order, method); });
+                        change.addEventListener('click', () => dropdown.toggle());
                         receipts.append(change);
                     }
                     if (stripePayment) {
@@ -236,6 +234,7 @@ function updateOverdueCards() {
 setInterval(updateOverdueCards, 15000);
 
 function render(orders) {
+    closePaymentDropdown();
     for (const [id, title] of [['new', 'New'], ['preparing', 'Preparing'], ['ready', 'Ready']]) {
         const items = orders.filter(o => id === 'new' ? ['Draft', 'Placed', 'Accepted'].includes(o.status)
             : o.status.toLowerCase() === id).sort((a, b) => { const direction = id === 'new' ? -1 : 1; return direction * ((Date.parse(a.createdAtUtc) || 0) - (Date.parse(b.createdAtUtc) || 0) || a.orderNumber - b.orderNumber); });
@@ -246,6 +245,7 @@ function render(orders) {
         for (const order of items) {
             const card = buildOrderCard(order, id, true);
             const openDetails = () => {
+                closePaymentDropdown();
                 detailStatus.textContent = '';
                 detailContent.replaceChildren(buildOrderCard(order, id));
                 detailDialog.showModal();
