@@ -11,7 +11,7 @@
   if (window.ResizeObserver) new ResizeObserver(measure).observe(area);
   else window.addEventListener('resize', measure);
   measure();
-  const banner = area.querySelector('.pos-alert-status'), button = document.querySelector('.pos-push-toggle'), testButton = document.querySelector('.pos-push-test'), deviceStatus = document.querySelector('.pos-push-device-status'), status = document.querySelector('.pos-push-message');
+  const banner = area.querySelector('.pos-alert-status'), button = document.querySelector('.pos-push-toggle'), testButton = document.querySelector('.pos-push-test'), delayedButton = document.querySelector('.pos-push-test-delayed'), deviceStatus = document.querySelector('.pos-push-device-status'), status = document.querySelector('.pos-push-message');
   let worker = null, audio = null, waiting = false;
   function decodeKey(value) {
     const padded = (value + '='.repeat((4 - value.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/');
@@ -22,6 +22,7 @@
     if (deviceStatus) deviceStatus.textContent = value;
     if (button) { button.dataset.enabled = String(enabled); button.textContent = enabled ? 'Disable Notifications' : 'Enable Notifications'; }
     if (testButton) testButton.disabled = !enabled;
+    if (delayedButton) delayedButton.disabled = !enabled;
   }
   const supported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window && (!/iPad|iPhone|iPod/.test(navigator.userAgent) || window.navigator.standalone === true);
   async function post(path, sub) {
@@ -88,17 +89,25 @@
     } catch (error) { message(error.message || 'Could not enable notifications. Please try again.'); }
     finally { button.disabled = false; }
   });
-  if (testButton) testButton.addEventListener('click', async () => {
-    testButton.disabled = true;
+  async function sendTest(delayed) {
+    if (testButton) testButton.disabled = true;
+    if (delayedButton) delayedButton.disabled = true;
     try {
       const registration = worker || await navigator.serviceWorker.getRegistration('/');
       const sub = registration && await registration.pushManager.getSubscription();
       if (!sub) { state('Disabled'); throw new Error('Device subscription is missing. Enable notifications again.'); }
-      const result = await post('test', sub);
+      if (delayed) message('Test requested. Wait a moment for the request to start, then lock this device. The server sends in 10 seconds.');
+      const result = await post(delayed ? 'test?delaySeconds=10' : 'test', sub);
       message(result.message);
-    } catch (error) { message(error.message); await updateSubscriptionButton(); }
-    finally { setTimeout(() => { if (button && button.dataset.enabled === 'true') testButton.disabled = false; }, 10000); }
-  });
+    } catch (error) {
+      message(delayed && error instanceof TypeError ? 'Connection closed while the device was locked. Check for the notification; server acceptance could not be confirmed here.' : error.message);
+      if (!delayed) await updateSubscriptionButton();
+    } finally {
+      setTimeout(() => { if (button && button.dataset.enabled === 'true') { if (testButton) testButton.disabled = false; if (delayedButton) delayedButton.disabled = false; } }, 10000);
+    }
+  }
+  if (testButton) testButton.addEventListener('click', () => sendTest(false));
+  if (delayedButton) delayedButton.addEventListener('click', () => sendTest(true));
   if (button) updateSubscriptionButton();
   if (location.pathname === '/orders.html') return;
   const soundScript = document.createElement('script'); soundScript.src = '/order-sounds.js?v=3'; document.head.append(soundScript);
