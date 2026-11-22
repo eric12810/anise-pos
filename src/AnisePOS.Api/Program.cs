@@ -64,6 +64,9 @@ builder.Services.AddRateLimiter(options => options.AddFixedWindowLimiter("staff-
     limiter.QueueLimit = 0;
     limiter.AutoReplenishment = true;
 }));
+builder.Services.AddRateLimiter(options => options.AddPolicy("staff-push-test", context =>
+    RateLimitPartition.GetFixedWindowLimiter(context.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? "anonymous", _ =>
+        new FixedWindowRateLimiterOptions { PermitLimit = 2, Window = TimeSpan.FromMinutes(1), QueueLimit = 0, AutoReplenishment = true })));
 builder.Services.ConfigureHttpJsonOptions(options => options.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
     .AddCookie(options =>
