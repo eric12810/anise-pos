@@ -32,6 +32,23 @@ public static class ReportEndpoints
                 .Select(r => new ReportRefund(r.CreatedAtUtc, r.CompletedAtUtc, r.Method, r.Status, r.Amount)).ToListAsync();
             return Results.Ok(Calculate(from, to, timeZoneOffsetMinutes, source, payments, refunds));
         });
+        reports.MapGet("/end-of-day", async (DateTimeOffset from, DateTimeOffset to, AniseDbContext db) =>
+        {
+            if (to <= from || to - from > TimeSpan.FromDays(1.1))
+                return Results.ValidationProblem(new Dictionary<string, string[]> { ["range"] = ["Choose one trading day."] });
+            var payments = await db.Payments.AsNoTracking().Where(IsConfirmedPayment)
+                .Where(p => p.PaidAtUtc >= from && p.PaidAtUtc < to)
+                .Select(p => new EndOfDayPayment(p.Method, p.Provider, p.Amount)).ToListAsync();
+            var refunds = await db.Refunds.AsNoTracking()
+                .Where(r => r.Status == RefundStatus.Completed && r.CompletedAtUtc >= from && r.CompletedAtUtc < to)
+                .Select(r => new EndOfDayPayment(r.Method,
+                    r.Order.Payments.Where(p => p.Provider == "StripeCheckout" || p.Provider == "WebsiteCash")
+                        .Select(p => p.Provider).FirstOrDefault() ??
+                    r.Order.Payments.Where(p => p.Method == r.Method).OrderByDescending(p => p.CreatedAtUtc)
+                        .Select(p => p.Provider).FirstOrDefault(), r.Amount))
+                .ToListAsync();
+            return Results.Ok(CalculateEndOfDay(payments, refunds));
+        });
     }
 
     public static SalesReportResponse Calculate(DateTimeOffset from, DateTimeOffset to, int timeZoneOffsetMinutes,
@@ -78,6 +95,26 @@ public static class ReportEndpoints
     public sealed record ReportPayment(DateTimeOffset PaidAtUtc, PaymentMethod Method, decimal Amount);
     public sealed record ReportRefund(DateTimeOffset CreatedAtUtc, DateTimeOffset? CompletedAtUtc,
         PaymentMethod Method, RefundStatus Status, decimal Amount);
+
+    public sealed record EndOfDayPayment(PaymentMethod Method, string? Provider, decimal Amount);
+    public sealed record EndOfDayAmounts(decimal WebsiteCard, decimal WebsiteCash, decimal PosCash,
+        decimal SumUp, decimal PosCard, decimal RecordedPosStripe);
+
+    public static EndOfDayAmounts CalculateEndOfDay(IEnumerable<EndOfDayPayment> payments,
+        IEnumerable<EndOfDayPayment> completedRefunds)
+    {
+        decimal Net(Func<EndOfDayPayment, bool> predicate) =>
+            payments.Where(predicate).Sum(p => p.Amount) - completedRefunds.Where(predicate).Sum(r => r.Amount);
+        // Provider identifies the website channel. Method alone cannot distinguish website cash
+        // or website Stripe from payments taken by staff in the POS.
+        return new EndOfDayAmounts(
+            Net(p => p.Provider == "StripeCheckout"),
+            Net(p => p.Provider == "WebsiteCash"),
+            Net(p => p.Provider is not ("StripeCheckout" or "WebsiteCash") && p.Method == PaymentMethod.Cash),
+            Net(p => p.Provider is not ("StripeCheckout" or "WebsiteCash") && p.Method == PaymentMethod.SumUp),
+            Net(p => p.Provider is not ("StripeCheckout" or "WebsiteCash") && p.Method is PaymentMethod.Card or PaymentMethod.Online),
+            Net(p => p.Provider is not ("StripeCheckout" or "WebsiteCash") && p.Method == PaymentMethod.Stripe));
+    }
 }
 
 public sealed record SalesReportResponse(DateTimeOffset From, DateTimeOffset To, int OrderCount,
