@@ -593,13 +593,24 @@ class V2Tests(unittest.TestCase):
         self.assertNotIn("PREFLIGHT_EVIDENCE", workflow)
         self.assertIn("schema_guard", workflow)
 
-    def test_release_candidate_requires_manual_staging_run(self):
+    def test_release_candidate_requires_staging_branch(self):
         self.assertTrue(resolve.accepted_branch({"head_branch": "staging", "event": "push"}))
-        self.assertTrue(resolve.accepted_branch({"head_branch": "release/push-notifications", "event": "workflow_dispatch"}))
-        self.assertTrue(resolve.accepted_branch({"head_branch": "release/push-production-safe", "event": "workflow_dispatch"}))
+        self.assertTrue(resolve.accepted_branch({"head_branch": "staging", "event": "workflow_dispatch"}))
+        self.assertFalse(resolve.accepted_branch({"head_branch": "release/push-notifications", "event": "workflow_dispatch"}))
+        self.assertFalse(resolve.accepted_branch({"head_branch": "release/push-production-safe", "event": "workflow_dispatch"}))
         self.assertFalse(resolve.accepted_branch({"head_branch": "release/push-notifications", "event": "push"}))
         self.assertFalse(resolve.accepted_branch({"head_branch": "release/push-production-safe", "event": "push"}))
         self.assertFalse(resolve.accepted_branch({"head_branch": "other", "event": "workflow_dispatch"}))
+
+    def test_validation_does_not_share_staging_deploy_lock(self):
+        validation = Path(".github/workflows/staging-upload.yml").read_text()
+        staging = Path(".github/workflows/pos-v2-staging.yml").read_text()
+        self.assertIn("anise-pos-validation-${{ github.event.pull_request.number || github.run_id }}", validation)
+        self.assertIn("concurrency: {group: anise-pos-staging", staging)
+        self.assertIn("if: github.ref == 'refs/heads/staging'", staging)
+        self.assertNotIn("release/push-notifications", staging)
+        self.assertIn("node --test tests/*.test.mjs", validation)
+        self.assertIn("node --test tests/*.test.mjs", staging)
 
     def test_schema_guard_blocks_runtime_database_changes(self):
         with tempfile.TemporaryDirectory() as folder:

@@ -16,7 +16,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: anise-pos-staging
+  group: anise-pos-validation-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: false
 
 env:
@@ -52,6 +52,8 @@ jobs:
         run: dotnet build AnisePOS.sln --configuration Release --no-restore
       - name: Run application checks
         run: dotnet run --project tests/AnisePOS.Checks --configuration Release --no-build
+      - name: Run JavaScript checks
+        run: node --test tests/*.test.mjs
       - name: Run deployment safeguard tests
         run: python3 -m unittest discover -s tests/deployment -v
       - name: Preflight SQL migrations without database access
