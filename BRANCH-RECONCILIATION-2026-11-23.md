@@ -41,3 +41,13 @@ On the current staging checkout, `python3 scripts/check-migrations.py` passed it
 The remaining application difference is limited to `wwwroot/end-of-day.html` and `wwwroot/reports.html`. Deployment workflows and modules still differ by environment. Draft [PR #42](https://github.com/eric12810/anise-pos/pull/42) narrows production artifact selection to the `staging` branch, removes the old manual release-branch staging path from the `main` workflow copy, and separates validation concurrency from staging deployment. Its GitHub build, tests, and package check passed; it has not merged. Branch histories remain divergent by design, and the deployment workflow differences require a separate review before declaring the repository fully reconciled.
 
 The latest successful staging run 45253210471 retains the unexpired artifact `anise-pos-v2-0761027bfa6d9d608bf6a89e8695eb557ab616b3`, whose run metadata names the `staging` branch and exact commit. The shared V2 package model and manifest preparation files are identical on both branches. This establishes format compatibility at the source and run-metadata level; no production deploy or live artifact installation was attempted. The staging and production deployment engines intentionally remain different to preserve their working recovery paths.
+
+| Remaining difference | Review decision |
+| --- | --- |
+| Staging `end-of-day.html` and `reports.html` | Intentional staging-only reporting changes after the current production artifact. Promote only through a verified staging artifact and manual production release. |
+| `pos-v2-staging.yml`, V2 CLI/engine/transport and staging recovery | Staging's newer deploy/recover path is the active working staging path. The `main` copy and production-specific engine path must not overwrite it through a broad merge. |
+| `pos-v2-production.yml`, `pos-v2-rollback.yml`, schema guard and manual SQL review modules | These are the active production release/recovery safeguards on `main`. Keep them available there; do not replace them with staging's older V2 production template. |
+| Five legacy production workflow files on `staging` | Historical candidates for retirement, absent from `main`. Their recovery/diagnostic dependencies need an explicit owner review before deletion. They are not part of the normal V2 release path. |
+| V2 tests, production FTPS diagnostic and deployment documentation | Follow their branch-specific tooling. Reconcile only alongside the workflow/engine path each test or document describes. |
+
+Do not merge `main` wholesale into `staging` while these deployment paths differ. A staging merge would automatically run the staging deployment workflow, even if its changes were documentation-only.
