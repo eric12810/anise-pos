@@ -40,11 +40,17 @@
       return data.ipAddress;
     }
 
-    function endOfDayEpsonContent(date,report,platforms){
+    function endOfDayLines(amounts,manual){
+      const delivery=manual.justEatCard+manual.justEatCash+manual.uberEats+manual.deliveroo;
+      const website=amounts.websiteCard+amounts.websiteCash;
+      // POS Card is deliberately summary-only; manual Stripe replaces recorded POS Stripe.
+      const pos=amounts.posCash+amounts.sumUp+amounts.posCard+manual.externalStripe;
+      const cash=manual.justEatCash+amounts.websiteCash+amounts.posCash;
+      const card=delivery-manual.justEatCash+amounts.websiteCard+amounts.sumUp+amounts.posCard+manual.externalStripe;
+      return {individual:[['Just Eat Card',manual.justEatCard],['Just Eat Cash',manual.justEatCash],['Uber Eats',manual.uberEats],['Deliveroo',manual.deliveroo],['SumUp',amounts.sumUp],['Website Card',amounts.websiteCard],['Website Cash',amounts.websiteCash],['POS Cash',amounts.posCash],['Stripe',manual.externalStripe]],summary:[['Delivery Platform',delivery],['POS',pos],['Website',website],['Cash',cash],['Card',card]]};
+    }
+    function endOfDayEpsonContent(date,lines){
       const width=560,margin=10,parts=[];
-      const platformTotal=Object.values(platforms).reduce((sum,value)=>sum+value,0);
-      const combined=report.netPaidTakings+platformTotal;
-      const combinedCash=report.cashSales-report.completedCashRefunds+platforms.justEatCash;
       const font=(size=30,bold=false)=>`${bold?'bold ':''}${size}px sans-serif`;
       function image(height,draw){
         const canvas=document.createElement('canvas');canvas.width=width;canvas.height=height;
@@ -54,21 +60,19 @@
         parts.push(`<image width="${width}" height="${height}" color="color_1" mode="mono">${btoa(bytes)}</image>`);
       }
       function centred(value,size=30,bold=false){image(Math.ceil(size*1.35)+6,context=>{context.font=font(size,bold);context.textAlign='center';context.textBaseline='top';context.fillText(value,width/2,2)})}
-      function row(label,value,bold=false){if(!nonZero(value))return;image(45,context=>{context.font=font(30,bold);context.textBaseline='top';context.fillText(label,margin,2);context.textAlign='right';context.fillText(value,width-margin,2)})}
-      function section(label){image(56,context=>{context.fillRect(0,10,width,40);context.fillStyle='#fff';context.font=font(29,true);context.textBaseline='middle';context.fillText(label.toUpperCase(),margin,30)})}
+      function row(label,value,bold=false){if(!nonZero(value))return;image(45,context=>{context.font=font(30,bold);context.textBaseline='top';context.fillText(label,margin,2);context.textAlign='right';context.fillText(currency.format(value),width-margin,2)})}
+      function separator(){image(24,context=>context.fillRect(margin,11,width-2*margin,2))}
       function space(height=14){image(height,()=>{})}
       centred('ANISE',40,true);centred('END OF DAY',34,true);centred(date,27);space(12);
-      const posValues=[report.cashSales,report.cardSales,report.completedRefunds,report.orderCount,report.collectionOrders,report.deliveryOrders,report.netPaidTakings];
-      if(posValues.some(nonZero)){section('AnisePOS');row('Cash',currency.format(report.cashSales));row('Card',currency.format(report.otherCardSales));row('SumUp',currency.format(report.sumUpSales));row('Stripe',currency.format(report.stripeSales));row('Refund',currency.format(report.completedRefunds));row('Order',countFormat.format(report.orderCount));row('Collection',countFormat.format(report.collectionOrders));row('Delivery',countFormat.format(report.deliveryOrders));row('POS Total',currency.format(report.netPaidTakings),true);space()}
-      if(Object.values(platforms).some(nonZero)){section('External takings');row('Uber Eats',currency.format(platforms.uberEats));row('Just Eat Card',currency.format(platforms.justEatCard));row('Deliveroo',currency.format(platforms.deliveroo));row('Just Eat Cash',currency.format(platforms.justEatCash));row('Stripe',currency.format(platforms.externalStripe));row('External total',currency.format(platformTotal),true);space()}
-      if(nonZero(combinedCash)){section('Cash up');row('Combined cash total',currency.format(combinedCash),true);space()}
-      if(nonZero(combined)){image(16,context=>context.fillRect(margin,7,width-2*margin,2));row('TOTAL TAKINGS',currency.format(combined),true);space(28)}
-      parts.push('<text>\n\n\n</text><cut type="feed"/>');
+      lines.individual.forEach(([label,value])=>row(label,value));
+      separator();
+      lines.summary.forEach(([label,value])=>row(label,value,true));
+      space(28);parts.push('<text>\n\n\n</text><cut type="feed"/>');
       return parts.join('');
     }
 
-    async function printEndOfDayToEpson(date,report,platforms){
-      const body=`<?xml version="1.0" encoding="utf-8"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><epos-print xmlns="http://www.epson-pos.com/schemas/2011/03/epos-print">${endOfDayEpsonContent(date,report,platforms)}</epos-print></s:Body></s:Envelope>`;
+    async function printEndOfDayToEpson(date,lines){
+      const body=`<?xml version="1.0" encoding="utf-8"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><epos-print xmlns="http://www.epson-pos.com/schemas/2011/03/epos-print">${endOfDayEpsonContent(date,lines)}</epos-print></s:Body></s:Envelope>`;
       const response=await fetch('https://'+await getPrinterAddress()+'/cgi-bin/epos/service.cgi?devid=local_printer&timeout=10000',{method:'POST',headers:{'Content-Type':'text/xml; charset=utf-8'},body,signal:AbortSignal.timeout(15000),credentials:'omit'});
       if(!response.ok)throw new Error('The printer returned HTTP '+response.status+'. Check the printer before retrying.');
       const xml=new DOMParser().parseFromString(await response.text(),'application/xml');
@@ -82,7 +86,7 @@
       printButton.disabled=true;
       printStatus.textContent='Sending to Epson…';
       try{
-        await printEndOfDayToEpson(endOfDayPrintData.date,endOfDayPrintData.report,endOfDayPrintData.platforms);
+        await printEndOfDayToEpson(endOfDayPrintData.date,endOfDayPrintData.lines);
         printStatus.textContent='End-of-day report sent to the Epson printer.';
       }catch(error){
         printStatus.textContent=error.name==='TypeError'||error.name==='TimeoutError'?'Could not confirm printing. Check the printer, Wi-Fi, local network permission and printer certificate.':error.message;
@@ -97,17 +101,18 @@
       to.setDate(to.getDate()+1);
       const params=new URLSearchParams({from:from.toISOString(),to:to.toISOString(),timeZoneOffsetMinutes:String(new Date().getTimezoneOffset())});
       try{
-        const response=await fetch('/api/reports/sales?'+params,{credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(15000)});
+        const response=await fetch('/api/reports/end-of-day?'+params,{credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(15000)});
         if(response.status===401){location.replace('/staff-login.html?return=%2Freports.html');return}
         if(!response.ok)throw new Error();
-        const report=await response.json();
-        const platforms={uberEats:Number(input.uberEats)||0,justEatCard:Number(input.justEatCard)||0,deliveroo:Number(input.deliveroo)||0,justEatCash:Number(input.justEatCash)||0,externalStripe:Number(input.externalStripe)||0};
+        const amounts=await response.json();
+        const manual={uberEats:Number(input.uberEats)||0,justEatCard:Number(input.justEatCard)||0,deliveroo:Number(input.deliveroo)||0,justEatCash:Number(input.justEatCash)||0,externalStripe:Number(input.externalStripe)||0};
+        const lines=endOfDayLines(amounts,manual);
         const date=new Date(input.date+'T00:00:00').toLocaleDateString('en-GB',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
-        const platformTotal=Object.values(platforms).reduce((sum,value)=>sum+value,0),combined=report.netPaidTakings+platformTotal,combinedCash=report.cashSales-report.completedCashRefunds+platforms.justEatCash;
-        endOfDayPrintData={date,report,platforms};
+        endOfDayPrintData={date,lines};
         printButton.disabled=false;
         document.title='Anise — End of day '+input.date;
-        reportTarget.innerHTML=`<h1>ANISE</h1><h2>END OF DAY</h2><p class="meta">${date}</p>${reportSection('AnisePOS',[reportRow('Cash',report.cashSales,'',currency),reportRow('Card',report.otherCardSales,'',currency),reportRow('SumUp',report.sumUpSales,'',currency),reportRow('Stripe',report.stripeSales,'',currency),reportRow('Refund',report.completedRefunds,'',currency),reportRow('Order',report.orderCount,'',countFormat),reportRow('Collection',report.collectionOrders,'',countFormat),reportRow('Delivery',report.deliveryOrders,'',countFormat),reportRow('POS Total',report.netPaidTakings,'grand',currency)])}${reportSection('External takings',[reportRow('Uber Eats',platforms.uberEats),reportRow('Just Eat Card',platforms.justEatCard),reportRow('Deliveroo',platforms.deliveroo),reportRow('Just Eat Cash',platforms.justEatCash),reportRow('Stripe',platforms.externalStripe),reportRow('External total',platformTotal,'grand')])}${reportSection('Cash up',[reportRow('Combined cash total',combinedCash,'grand')])}${nonZero(combined)?`<section class="section">${reportRow('Total takings',combined,'grand')}</section>`:''}<p class="footer">Printed ${new Date().toLocaleString('en-GB')}</p>`;
+        const rows=items=>items.map(([label,value])=>reportRow(label,value)).join('');
+        reportTarget.innerHTML=`<h1>ANISE</h1><h2>END OF DAY</h2><p class="meta">${date}</p><div>${rows(lines.individual)}</div><section class="section">${rows(lines.summary)}</section><p class="footer">Printed ${new Date().toLocaleString('en-GB')}</p>`;
       }catch{reportTarget.innerHTML='<p class="error">Could not load the AnisePOS totals for this date.</p>'}
     })();
   </script>

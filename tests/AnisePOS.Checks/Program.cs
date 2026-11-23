@@ -123,6 +123,17 @@ if (splitReport.CardSales != 65m || splitReport.OtherCardSales != 15m ||
     splitReport.SumUpSales != 20m || splitReport.StripeSales != 30m || splitReport.NetPaidTakings != 65m)
     throw new Exception("Split card payment reporting checks failed.");
 Console.WriteLine("Passed payment-date, refund-date, cancelled order, partial refund and unpaid-order reporting checks.");
+var endOfDay = ReportEndpoints.CalculateEndOfDay(
+    [new(PaymentMethod.Stripe, "StripeCheckout", 40m), new(PaymentMethod.Cash, "WebsiteCash", 15m),
+     new(PaymentMethod.Cash, null, 20m), new(PaymentMethod.SumUp, null, 30m),
+     new(PaymentMethod.Card, null, 10m), new(PaymentMethod.Stripe, "Stripe", 25m)],
+    [new(PaymentMethod.Stripe, "StripeCheckout", 5m), new(PaymentMethod.Cash, "WebsiteCash", 2m),
+     new(PaymentMethod.Cash, null, 3m), new(PaymentMethod.SumUp, null, 4m),
+     new(PaymentMethod.Card, null, 1m), new(PaymentMethod.Stripe, "Stripe", 6m)]);
+if (endOfDay.WebsiteCard != 35m || endOfDay.WebsiteCash != 13m || endOfDay.PosCash != 17m ||
+    endOfDay.SumUp != 26m || endOfDay.PosCard != 9m || endOfDay.RecordedPosStripe != 19m)
+    throw new Exception("End-of-day source or refund allocation failed.");
+Console.WriteLine("Passed end-of-day channel and refund allocation checks.");
 
 var corsOptions = new CorsOptions();
 WebsiteCors.Configure(corsOptions);
