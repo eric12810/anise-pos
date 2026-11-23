@@ -83,9 +83,8 @@ public static class StaffPushEndpoints
             var hash = Hash(request.Endpoint); var staffId = user.FindFirstValue(ClaimTypes.NameIdentifier);
             await db.StaffPushSubscriptions.Where(x => x.EndpointHash == hash && x.StaffId == staffId).ExecuteDeleteAsync(ct); return Results.Ok();
         });
-        group.MapPost("/test", async (StaffPushRegistration? request, int? delaySeconds, ClaimsPrincipal user, AniseDbContext db, IDataProtectionProvider protection, PushKeyStore keys, ILogger<StaffPushWorker> logger, CancellationToken ct) =>
+        group.MapPost("/test", async (StaffPushRegistration? request, ClaimsPrincipal user, AniseDbContext db, IDataProtectionProvider protection, PushKeyStore keys, ILogger<StaffPushWorker> logger, CancellationToken ct) =>
         {
-            if (delaySeconds is not null and not 10) return Results.BadRequest(new { message = "Invalid test delay." });
             var staffId = user.FindFirstValue(ClaimTypes.NameIdentifier);
             if (staffId is null || request?.Keys is null || !ValidEndpoint(request.Endpoint)) return Results.BadRequest(new { message = "Invalid device subscription." });
             var row = await db.StaffPushSubscriptions.AsNoTracking().SingleOrDefaultAsync(x => x.EndpointHash == Hash(request.Endpoint) && x.StaffId == staffId, ct);
@@ -94,20 +93,16 @@ public static class StaffPushEndpoints
             {
                 var saved = JsonSerializer.Deserialize<StaffPushRegistration>(protection.CreateProtector("Anise.StaffPush.Subscription.v1").Unprotect(row.ProtectedSubscription));
                 if (saved?.Keys is null || saved.Endpoint != request.Endpoint || saved.Keys != request.Keys) return Results.Conflict(new { message = "This device's subscription changed. Enable notifications again." });
-                // Keep the server-side timer and delivery alive if iOS suspends the locked web app.
-                if (delaySeconds == 10) await Task.Delay(TimeSpan.FromSeconds(10));
-                var deliveryToken = delaySeconds == 10 ? CancellationToken.None : ct;
                 using var handler = new HttpClientHandler { AllowAutoRedirect = false };
                 using var http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(12) };
                 using var client = new WebPushClient(http);
                 var payload = JsonSerializer.Serialize(new { title = "Anise POS — Test Notification", body = "Notifications are working on this device.", tag = "anise-push-test-" + Guid.NewGuid().ToString("N") });
-                await client.SendNotificationAsync(new PushSubscription(saved.Endpoint, saved.Keys.P256dh, saved.Keys.Auth), payload, new Dictionary<string, object> { ["vapidDetails"] = keys.Get(), ["TTL"] = 300 }, deliveryToken);
-                logger.LogInformation("Staff push test accepted by push service (delayed: {Delayed})", delaySeconds == 10);
+                await client.SendNotificationAsync(new PushSubscription(saved.Endpoint, saved.Keys.P256dh, saved.Keys.Auth), payload, new Dictionary<string, object> { ["vapidDetails"] = keys.Get(), ["TTL"] = 300 }, ct);
                 return Results.Ok(new { accepted = true, message = "Push service accepted the test. Confirm it appears on this device." });
             }
             catch (WebPushException ex) when (ex.StatusCode is HttpStatusCode.Gone or HttpStatusCode.NotFound)
             {
-                await db.StaffPushSubscriptions.Where(x => x.Id == row.Id).ExecuteDeleteAsync(delaySeconds == 10 ? CancellationToken.None : ct);
+                await db.StaffPushSubscriptions.Where(x => x.Id == row.Id).ExecuteDeleteAsync(ct);
                 return Results.Conflict(new { message = "The push service expired this device. Enable notifications again." });
             }
             catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)

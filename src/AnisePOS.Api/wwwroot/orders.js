@@ -31,7 +31,7 @@ const detailStatus = document.querySelector('#order-detail-status');
 const cancelDialog = document.querySelector('#cancel-dialog'), cancelError = document.querySelector('#cancel-error'), cancelConfirm = document.querySelector('#cancel-confirm');
 let cancellingOrder = null;
 document.querySelector('#order-detail-close').addEventListener('click', () => detailDialog.close());
-detailDialog.addEventListener('close', () => { detailContent.replaceChildren(); load(); });
+detailDialog.addEventListener('close', () => { closePaymentDropdown(); detailContent.replaceChildren(); load(); });
 new MutationObserver(() => { if (detailDialog.open) detailStatus.textContent = message.textContent; }).observe(message, {childList: true, characterData: true, subtree: true});
 function closeOrderDetails() { if (detailDialog.open) detailDialog.close(); }
 function deliveryPostcode(address) {
@@ -140,10 +140,14 @@ function buildOrderCard(order, id, compact = false) {
                 if (order.paymentStatus === 'Pending' || order.paymentStatus === 'Authorised') {
                     const stripePayment = ['Stripe', 'StripeConfirming', 'StripeCancelled'].includes(order.paymentProvider);
                     if (order.paymentStatus === 'Pending' && (order.paymentProvider === 'WebsiteCash' || (!order.paymentProvider && !order.hasPaymentReference))) {
-                        const method = order.paymentMethod === 'Cash' ? 'Card' : 'Cash';
-                        const change = element('button', 'Change payment', 'payment-action');
-                        change.setAttribute('aria-label', 'Order ' + order.orderNumber + ': change payment to ' + method);
-                        change.addEventListener('click', () => changePaymentMethod(order, method));
+                        const change = element('button', 'Change payment: ' + order.paymentMethod, 'payment-action');
+                        change.type = 'button';
+                        change.setAttribute('aria-label', 'Order ' + order.orderNumber + ': change payment method');
+                        change.setAttribute('aria-haspopup', 'menu');
+                        change.setAttribute('aria-expanded', 'false');
+                        const dropdown = createPaymentDropdown(change, ['Cash', 'SumUp', 'Card', 'Stripe'],
+                            () => order.paymentMethod, method => { if (method !== order.paymentMethod) changePaymentMethod(order, method); });
+                        change.addEventListener('click', () => dropdown.toggle());
                         receipts.append(change);
                     }
                     if (stripePayment) {
@@ -164,15 +168,25 @@ function buildOrderCard(order, id, compact = false) {
             if (websiteOrder && order.status === 'Placed') {
                 const acceptForm = element('form', undefined, 'accept-form');
                 const label = element('label', 'Minutes until ' + (order.orderType === 'Delivery' ? 'delivery' : 'collection'));
-                const estimate = element('input'); estimate.type = 'number'; estimate.min = '1'; estimate.max = '10080'; estimate.step = '1'; estimate.required = true;
-                estimate.value = order.orderType === 'Delivery' ? '30' : '15';
+                const estimate = element('select', undefined, 'eta-wheel');
+                const existingEta = order.estimatedAtUtc && Number.isFinite(Date.parse(order.estimatedAtUtc)) ? new Date(order.estimatedAtUtc) : null;
+                const initialMinutes = existingEta ? Math.max(1, Math.ceil((existingEta.getTime() - Date.now()) / 60000)) : (order.orderType === 'Delivery' ? 30 : 15);
+                for (let minutes = 5; minutes <= 240; minutes += 5) {
+                    const option = element('option', minutes + ' min'); option.value = String(minutes); estimate.append(option);
+                }
+                if (existingEta && (initialMinutes % 5 || initialMinutes > 240)) {
+                    const option = element('option', initialMinutes + ' min · current'); option.value = String(initialMinutes);
+                    estimate.insertBefore(option, [...estimate.options].find(item => Number(item.value) > initialMinutes) || null);
+                }
+                estimate.value = String(initialMinutes);
                 estimate.setAttribute('aria-label', 'Minutes until ' + order.orderType.toLowerCase() + ' for order ' + order.orderNumber);
-                let previousEstimate = estimate.value;
-                estimate.addEventListener('focus', () => { previousEstimate = estimate.value; estimate.value = ''; });
-                estimate.addEventListener('blur', () => { if (!estimate.value) estimate.value = previousEstimate; });
                 label.append(estimate); acceptForm.append(label);
+                const chosen = element('p', '', 'detail'); acceptForm.append(chosen);
+                let changed = false;
+                estimate.addEventListener('change', () => { changed = true; chosen.textContent = 'Accept with ETA: ' + new Date(Date.now() + Number(estimate.value) * 60000).toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'}); });
+                chosen.textContent = existingEta ? 'Current ETA: ' + existingEta.toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'}) + ' · kept unless changed' : 'Default ETA: ' + estimate.value + ' minutes';
                 const accept = element('button', 'Accept order', 'advance'); accept.type = 'submit'; accept.disabled = order.paymentStatus === 'RefundPending'; acceptForm.append(accept);
-                acceptForm.addEventListener('submit', event => { event.preventDefault(); if (acceptForm.reportValidity()) acceptWebsiteOrder(order, estimate.value); });
+                acceptForm.addEventListener('submit', event => { event.preventDefault(); if (acceptForm.reportValidity()) acceptWebsiteOrder(order, estimate.value, changed ? null : existingEta); });
                 const decline = element('button', 'Decline order', 'decline-order'); decline.type = 'button';
                 decline.addEventListener('click', () => declineWebsiteOrder(order));
                 card.append(acceptForm, decline);
@@ -220,6 +234,7 @@ function updateOverdueCards() {
 setInterval(updateOverdueCards, 15000);
 
 function render(orders) {
+    closePaymentDropdown();
     for (const [id, title] of [['new', 'New'], ['preparing', 'Preparing'], ['ready', 'Ready']]) {
         const items = orders.filter(o => id === 'new' ? ['Draft', 'Placed', 'Accepted'].includes(o.status)
             : o.status.toLowerCase() === id).sort((a, b) => { const direction = id === 'new' ? -1 : 1; return direction * ((Date.parse(a.createdAtUtc) || 0) - (Date.parse(b.createdAtUtc) || 0) || a.orderNumber - b.orderNumber); });
@@ -230,6 +245,7 @@ function render(orders) {
         for (const order of items) {
             const card = buildOrderCard(order, id, true);
             const openDetails = () => {
+                closePaymentDropdown();
                 detailStatus.textContent = '';
                 detailContent.replaceChildren(buildOrderCard(order, id));
                 detailDialog.showModal();
@@ -285,25 +301,26 @@ function printerContent(order){ return receiptPrinterContent(order); }
       } catch {return false;}
     }
 
-async function acceptWebsiteOrder(order, estimate) {
+async function acceptWebsiteOrder(order, estimate, existingEta = null) {
     if (saving || loading) return;
     const minutes = Number(estimate);
     if (!Number.isInteger(minutes) || minutes < 1 || minutes > 10080) { message.textContent = 'Enter a whole number of minutes between 1 and 10080.'; return; }
-    const at = new Date(Date.now() + minutes * 60000);
+    const at = existingEta && existingEta > new Date() ? existingEta : new Date(Date.now() + minutes * 60000);
     saving = true;
     try {
         await request('/api/order-queue/' + order.orderNumber + '/accept', {
             method: 'POST', headers: {'Content-Type': 'application/json', 'X-HTTP-Method-Override': 'PUT'}, body: JSON.stringify({estimatedAtUtc: at.toISOString()})
         });
         document.activeElement?.blur();
-        message.textContent = 'Order #' + order.orderNumber + ' accepted. Sending two receipts to the printer…';
-        const printed = await autoPrintReceipt(order.orderNumber);
         saving = false;
         closeOrderDetails();
         await load();
-        message.textContent = printed
-            ? 'Order #' + order.orderNumber + ' accepted. Two receipts sent to the printer; check the receipts.'
-            : 'Order #' + order.orderNumber + ' accepted, but printing could not be confirmed. Check the printer before reprinting from Customer receipt.';
+        message.textContent = 'Order #' + order.orderNumber + ' accepted. Sending two receipts to the printer…';
+        void autoPrintReceipt(order.orderNumber).then(printed => {
+            message.textContent = printed
+                ? 'Order #' + order.orderNumber + ' accepted. Two receipts sent to the printer; check the receipts.'
+                : 'Order #' + order.orderNumber + ' accepted, but printing could not be confirmed. Check the printer before reprinting from Customer receipt.';
+        });
     } catch (error) { message.textContent = error.message + ' Check the order queue before trying again.'; }
     finally { saving = false; }
 }

@@ -10,9 +10,48 @@ using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Configuration;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Cryptography;
+using System.Text.Json;
 using WebPush;
 
 // Run the production-only EF schema mapping without opening a SQL connection.
+var callerNow = DateTimeOffset.UtcNow;
+var callerId = Guid.NewGuid();
+if (!CallerEventEndpoints.Authorized(new string('s', 40), new string('s', 40)) ||
+    CallerEventEndpoints.Authorized("wrong", new string('s', 40)) ||
+    CallerEventEndpoints.Authorized(null, new string('s', 40)) ||
+    CallerEventEndpoints.NormalizePhone("+44 (0)7123 456789") != "07123456789" ||
+    CallerEventEndpoints.NormalizePhone("0044 7123 456789") != "07123456789" ||
+    CallerEventEndpoints.NormalizePhone("07123 456789") != "07123456789" ||
+    CallerEventEndpoints.NormalizePhone("+33123456789") != "+33123456789" ||
+    CallerEventEndpoints.NormalizePhone("Withheld") is not null ||
+    CallerEventEndpoints.FindCustomer(new[] { new Customer { Phone = "07123456789" }, new Customer { Phone = "02079460123" } }, "07123456789", c => c.Phone)?.Phone != "07123456789" ||
+    CallerEventEndpoints.FindCustomer(new[] { new Customer { Phone = "02079460123" } }, "07123456789", c => c.Phone) is not null ||
+    !CallerEventEndpoints.Valid(new(callerId, "Withheld", callerNow, "incoming/ringing"), callerNow) ||
+    !CallerEventEndpoints.Valid(new(Guid.NewGuid(), "Withheld", callerNow, "incoming/answered", callerId), callerNow) ||
+    CallerEventEndpoints.Valid(new(Guid.NewGuid(), "Withheld", callerNow, "incoming/answered"), callerNow) ||
+    CallerEventEndpoints.Valid(new(callerId, "07123456789", callerNow.AddMinutes(-3), "incoming/ringing"), callerNow))
+    throw new Exception("Caller authentication, telephone or timestamp checks failed.");
+Console.WriteLine("Passed caller event authentication, customer lookup, telephone and timestamp checks.");
+using (var streamPayload = JsonDocument.Parse(CallerEventEndpoints.SerializeStreamNotification(
+    new CallerNotification(callerId, callerNow, "07123456789", null, null, callerId, "ringing"))))
+{
+    if (streamPayload.RootElement.GetProperty("eventId").GetGuid() != callerId ||
+        streamPayload.RootElement.GetProperty("callerNumber").GetString() != "07123456789")
+        throw new Exception("Caller stream payload must use browser-compatible JSON names.");
+}
+Console.WriteLine("Passed caller stream JSON compatibility check.");
+if (!CallerEventStore.CanTransition(null, "ringing") ||
+    !CallerEventStore.CanTransition("ringing", "answered") ||
+    !CallerEventStore.CanTransition("ringing", "missed") ||
+    !CallerEventStore.CanTransition("answered", "ended") ||
+    CallerEventStore.CanTransition("ringing", "ended") ||
+    CallerEventStore.CanTransition("answered", "missed") ||
+    CallerEventStore.CanTransition("ended", "answered") ||
+    CallerEventStore.CanTransition("missed", "ringing") ||
+    CallerEventStore.CanTransition("ringing", "ringing"))
+    throw new Exception("Caller lifecycle transition check failed.");
+Console.WriteLine("Passed caller lifecycle transitions.");
+
 using (var model = new AniseDbContext(new DbContextOptionsBuilder<AniseDbContext>()
            .UseSqlServer("Server=localhost;Database=offline-model-check").Options))
 {
@@ -27,6 +66,15 @@ using (var model = new AniseDbContext(new DbContextOptionsBuilder<AniseDbContext
 }
 
 var day1 = new DateTimeOffset(2026, 11, 12, 0, 0, 0, TimeSpan.Zero);
+if (!CommerceEndpoints.ValidSavedCustomerAddress("Jane Smith", "07123456789", "NW1 8ET", "10 High Street", "Flat 2") ||
+    CommerceEndpoints.ValidSavedCustomerAddress("", "07123456789", "NW1 8ET", "10 High Street", null) ||
+    CommerceEndpoints.ValidSavedCustomerAddress("Jane Smith", "123", "NW1 8ET", "10 High Street", null) ||
+    CommerceEndpoints.ValidSavedCustomerAddress("Jane Smith", "07123abc789", "NW1 8ET", "10 High Street", null) ||
+    CommerceEndpoints.ValidSavedCustomerAddress("Jane Smith", "07123456789", "", "10 High Street", null) ||
+    CommerceEndpoints.ValidSavedCustomerAddress("Jane Smith", "07123456789", "NW1 8ET", "", null) ||
+    CommerceEndpoints.ValidSavedCustomerAddress(new string('A', 81), "07123456789", "NW1 8ET", "10 High Street", null))
+    throw new Exception("Saved customer address validation checks failed.");
+Console.WriteLine("Passed saved customer address validation checks.");
 var day2 = day1.AddDays(1);
 var confirmedPayment = ReportEndpoints.IsConfirmedPayment.Compile();
 if (confirmedPayment(new Payment { Status = PaymentStatus.Pending, PaidAtUtc = day1, Amount = 99m }) ||
@@ -68,6 +116,12 @@ if (firstReport.OrderCount != 2 || firstReport.CollectionOrders != 2 || firstRep
     secondReport.CompletedRefunds != 12m || secondReport.PendingRefunds != 8m ||
     secondReport.NetPaidTakings != 13m || secondReport.Days.Single().PaidSales != 25m)
     throw new Exception("Payment, cancelled order, partial refund or trading-day reporting checks failed.");
+var splitReport = ReportEndpoints.Calculate(day1, day2, 0, [],
+    [new(day1, PaymentMethod.Card, 10m), new(day1, PaymentMethod.SumUp, 20m),
+     new(day1, PaymentMethod.Stripe, 30m), new(day1, PaymentMethod.Online, 5m)], []);
+if (splitReport.CardSales != 65m || splitReport.OtherCardSales != 15m ||
+    splitReport.SumUpSales != 20m || splitReport.StripeSales != 30m || splitReport.NetPaidTakings != 65m)
+    throw new Exception("Split card payment reporting checks failed.");
 Console.WriteLine("Passed payment-date, refund-date, cancelled order, partial refund and unpaid-order reporting checks.");
 
 var corsOptions = new CorsOptions();
@@ -274,10 +328,15 @@ if (!AnisePOS.Api.Email.GmailConfirmationSender.ValidAddress("customer@example.c
     throw new Exception("Confirmation email address validation failed.");
 Console.WriteLine("Passed confirmation email address validation checks.");
 
-var receipt = AnisePOS.Api.Email.GmailConfirmationSender.Compose(42, "https://example.test/#secret");
-if (!receipt.Subject.Contains("#42 received") || !receipt.Body.Contains("awaiting acceptance") ||
+var receipt = AnisePOS.Api.Email.GmailConfirmationSender.Compose(42, "https://example.test/#secret", OrderType.Delivery,
+    new DateTimeOffset(2026, 11, 20, 18, 30, 0, TimeSpan.Zero));
+if (!receipt.Subject.Contains("#42 accepted") || !receipt.Body.Contains("Estimated delivery: 18:30") ||
     !receipt.Body.Contains("https://example.test/#secret") || !receipt.Body.Contains("expires 24 hours after ordering"))
     throw new Exception("Initial order receipt must include the private tracking link and its expiry.");
+var collectionReceipt = AnisePOS.Api.Email.GmailConfirmationSender.Compose(43, "https://example.test/#secret", OrderType.Collection,
+    new DateTimeOffset(2026, 11, 20, 18, 15, 0, TimeSpan.Zero));
+if (!collectionReceipt.Body.Contains("Estimated collection: 18:15"))
+    throw new Exception("Collection confirmation must include the accepted ETA.");
 
 var veganLine = new OrderLine { ProductName = "Vegetable Spring Rolls", VariantName = "Regular", Quantity = 2, IsVegan = true,
     Notes = "Extra crispy", Modifiers = new List<OrderLineModifier> { new() { ModifierName = "Chilli sauce" } } };
@@ -329,7 +388,7 @@ if (innerBand?.Fee != 2m || innerBand.RequiresApproval || outerBand?.Fee != 4m |
 Console.WriteLine("Passed delivery radius bands, validation and sector interaction checks.");
 if (!CommerceEndpoints.ValidPosEstimate(OrderType.Collection, null) || !CommerceEndpoints.ValidPosEstimate(OrderType.Collection, 10) ||
     !CommerceEndpoints.ValidPosEstimate(OrderType.Delivery, 30) || CommerceEndpoints.ValidPosEstimate(OrderType.Collection, 11) ||
-    CommerceEndpoints.ValidPosEstimate(OrderType.Delivery, 15) || CommerceEndpoints.ValidPosEstimate(OrderType.Collection, 0) ||
+    !CommerceEndpoints.ValidPosEstimate(OrderType.Delivery, 15) || CommerceEndpoints.ValidPosEstimate(OrderType.Delivery, 16) || CommerceEndpoints.ValidPosEstimate(OrderType.Collection, 0) ||
     CommerceEndpoints.ValidPosEstimate(OrderType.Delivery, 1450)) throw new Exception("POS estimate validation failed.");
 Console.WriteLine("Passed POS estimated time validation checks.");
 var days = Enumerable.Range(0, 7).Select(day => new OpeningDay(day, day is not (1 or 2), "09:00", "22:00")).ToList();

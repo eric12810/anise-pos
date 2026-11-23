@@ -99,6 +99,43 @@ public static class WebsiteOrderEndpoints
             Results.Ok(new { available = CardCheckoutConfigured(config, environment) }))
             .RequireCors("PublicWebsiteCheckout").RequireRateLimiting("website-status");
 
+        // A returned checkout reference is a bearer credential. Stripe, not the browser redirect,
+        // decides whether the same session can be retried or safely expired before a cash order.
+        app.MapPost("/api/website/stripe-return", async (StripeReturnRequest request, AniseDbContext db,
+            IConfiguration config, IHostEnvironment environment, IHttpClientFactory clients, CancellationToken ct) =>
+        {
+            var mode = WebsiteStripeMode.From(config, environment);
+            if (environment.IsProduction() || mode is null || request.RequestId == Guid.Empty) return Results.NotFound();
+            var checkout = await db.WebsiteCheckouts.AsNoTracking().SingleOrDefaultAsync(x => x.RequestId == request.RequestId && x.CreatedAtUtc >= DateTimeOffset.UtcNow.AddHours(-24), ct);
+            if (checkout is null || !mode.MatchesSession(checkout.StripeSessionId)) return Results.NotFound();
+            if (checkout.CompletedOrderId is not null) return Results.Ok(new { state = "recorded" });
+            try
+            {
+                var sessionUrl = "https://api.stripe.com/v1/checkout/sessions/" + Uri.EscapeDataString(checkout.StripeSessionId!);
+                using var inspect = new HttpRequestMessage(HttpMethod.Get, sessionUrl);
+                inspect.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", config["Stripe:SecretKey"]);
+                using var response = await clients.CreateClient().SendAsync(inspect, ct);
+                if (!response.IsSuccessStatusCode) return Results.Problem("Payment status is temporarily unavailable.", statusCode: 503);
+                using var json = System.Text.Json.JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+                var status = json.RootElement.GetProperty("status").GetString();
+                var paymentStatus = json.RootElement.GetProperty("payment_status").GetString();
+                if (paymentStatus != "unpaid" || status == "complete") return Results.Ok(new { state = "verifying" });
+                if (status == "expired") return Results.Ok(new { state = "expired" });
+                if (status != "open") return Results.Problem("Payment status is temporarily unavailable.", statusCode: 503);
+                if (!request.Expire) return Results.Ok(new { state = "open" });
+                using var expire = new HttpRequestMessage(HttpMethod.Post, sessionUrl + "/expire");
+                expire.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", config["Stripe:SecretKey"]);
+                using var expiredResponse = await clients.CreateClient().SendAsync(expire, ct);
+                if (!expiredResponse.IsSuccessStatusCode) return Results.Ok(new { state = "verifying" });
+                using var expiredJson = System.Text.Json.JsonDocument.Parse(await expiredResponse.Content.ReadAsStringAsync(ct));
+                return expiredJson.RootElement.GetProperty("status").GetString() == "expired" &&
+                    expiredJson.RootElement.GetProperty("payment_status").GetString() == "unpaid"
+                    ? Results.Ok(new { state = "expired" }) : Results.Ok(new { state = "verifying" });
+            }
+            catch (Exception e) when (e is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException or KeyNotFoundException)
+            { return Results.Problem("Payment status is temporarily unavailable.", statusCode: 503); }
+        }).RequireCors("PublicWebsiteCheckout").RequireRateLimiting("website-status");
+
         // Card checkout remains test-only until explicitly configured and verified.
         app.MapPost("/api/website/stripe-checkout", async (WebsiteCashOrder request, AniseDbContext db,
             IConfiguration config, IHostEnvironment environment, IHttpClientFactory clients, IDataProtectionProvider protection, CancellationToken ct) =>
@@ -197,7 +234,7 @@ public static class WebsiteOrderEndpoints
             {
                 var baseUrl = config["GoogleMail:TrackingBaseUrl"];
                 if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var tracking) || tracking.Scheme != "https" ||
-                    tracking.Host is not ("staging.anise.dotnetcloud.co.uk" or "www.loveanise.co.uk" or "loveanise.co.uk") ||
+                    tracking.Host is not ("staging.anise.dotnetcloud.co.uk" or "www.staging.loveanise.co.uk" or "staging.loveanise.co.uk" or "www.loveanise.co.uk" or "loveanise.co.uk") ||
                     !tracking.IsDefaultPort || !string.IsNullOrEmpty(tracking.UserInfo) || tracking.AbsolutePath != "/order-status.html" ||
                     !string.IsNullOrEmpty(tracking.Fragment) || !string.IsNullOrEmpty(tracking.Query))
                     return Results.Problem("Order confirmation is temporarily unavailable.", statusCode: 503);
@@ -233,7 +270,8 @@ public static class WebsiteOrderEndpoints
                 stripeRequest.Headers.Add("Stripe-Version", "2024-06-20");
                 stripeRequest.Content = new FormUrlEncodedContent(new Dictionary<string, string> {
                     ["mode"] = "payment", ["payment_method_types[0]"] = "card",
-                    ["success_url"] = new Uri(new Uri(successUrl!), "/order-status.html").AbsoluteUri + "#" + request.RequestId.ToString("D"), ["cancel_url"] = cancelUrl! + "#" + request.RequestId.ToString("D"),
+                    ["success_url"] = new Uri(new Uri(successUrl!), "/order-status.html").AbsoluteUri + "#" + request.RequestId.ToString("D"),
+                    ["cancel_url"] = environment.IsProduction() ? cancelUrl! + "#" + request.RequestId.ToString("D") : new Uri(new Uri(cancelUrl!), "/order").AbsoluteUri + "?stripe_cancel=" + request.RequestId.ToString("D"),
                     ["client_reference_id"] = checkout.Id.ToString("D"),
                     ["metadata[website_checkout_id]"] = checkout.Id.ToString("D"),
                     ["line_items[0][price_data][currency]"] = "gbp",
@@ -345,7 +383,7 @@ public static class WebsiteOrderEndpoints
             {
                 var baseUrl = config["GoogleMail:TrackingBaseUrl"];
                 if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var trackingBase) || trackingBase.Scheme != "https" ||
-                    trackingBase.Host is not ("staging.anise.dotnetcloud.co.uk" or "www.loveanise.co.uk" or "loveanise.co.uk") ||
+                    trackingBase.Host is not ("staging.anise.dotnetcloud.co.uk" or "www.staging.loveanise.co.uk" or "staging.loveanise.co.uk" or "www.loveanise.co.uk" or "loveanise.co.uk") ||
                     !trackingBase.IsDefaultPort || !string.IsNullOrEmpty(trackingBase.UserInfo) ||
                     trackingBase.AbsolutePath != "/order-status.html" || !string.IsNullOrEmpty(trackingBase.Fragment) || !string.IsNullOrEmpty(trackingBase.Query))
                     return Results.Problem("Order confirmation is temporarily unavailable.", statusCode: 503);
@@ -375,6 +413,7 @@ public static class WebsiteOrderEndpoints
             (uri.Host == "www.loveanise.co.uk" || uri.Host == "loveanise.co.uk" || uri.Host == "www.staging.loveanise.co.uk" || uri.Host == "staging.loveanise.co.uk") && uri.IsDefaultPort && string.IsNullOrEmpty(uri.UserInfo) && string.IsNullOrEmpty(uri.Fragment);
     public sealed record DeliveryQuoteRequest(string? Postcode);
     public sealed record WebsiteStatusRequest(Guid RequestId);
+    public sealed record StripeReturnRequest(Guid RequestId, bool Expire = false);
     public sealed record WebsiteCashOrder(Guid RequestId, OrderType OrderType, string Name, string Phone,
         string? AddressLine1, string? AddressLine2, string? Postcode, List<WebsiteOrderLine> Lines, decimal? ExpectedTotal, string? Email = null, bool OutsideRadiusAcknowledged = false, string? PromoCode = null, [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool IsReturningCustomer = false);
     public sealed record WebsiteOrderLine(Guid VariantId, int Quantity, List<Guid> ModifierIds, string? Notes);
