@@ -10,9 +10,21 @@ namespace AnisePOS.Api.Endpoints;
 
 public static class CommerceEndpoints
 {
+    private static (string First, string? Last) CustomerNameParts(string name)
+    {
+        var split = name.LastIndexOf(' ', Math.Min(80, name.Length - 1));
+        return split < 0 ? (name, null) : (name[..split].Trim(), name[(split + 1)..].Trim());
+    }
+    public static bool ValidSavedCustomerAddress(string? name, string? phone, string? postcode, string? line1, string? line2) =>
+        !string.IsNullOrWhiteSpace(name) && name.Trim().Length <= 160 && !name.Any(char.IsControl) &&
+        CustomerNameParts(name.Trim()) is var parts && parts.First.Length is >= 1 and <= 80 && (parts.Last?.Length ?? 0) <= 80 &&
+        !string.IsNullOrWhiteSpace(phone) && phone.Trim().Length is >= 7 and <= 30 && phone.Trim().All(c => c is >= '0' and <= '9') &&
+        !string.IsNullOrWhiteSpace(postcode) && postcode.Trim().Length is >= 5 and <= 20 && !postcode.Any(char.IsControl) &&
+        !string.IsNullOrWhiteSpace(line1) && line1.Trim().Length <= 150 && !line1.Any(char.IsControl) &&
+        (line2?.Trim().Length ?? 0) <= 150 && (line2 is null || !line2.Any(char.IsControl));
     public static bool ValidPosEstimate(OrderType type, int? minutes) => minutes is null ||
         (type is OrderType.Collection or OrderType.Delivery && minutes > 0 && minutes <= 1440 &&
-         minutes % (type == OrderType.Collection ? 5 : 10) == 0);
+         minutes % 5 == 0);
     private static async Task<Dictionary<(Guid CategoryId, Guid ProductId), int>> ProductPositions(AniseDbContext db)
     {
         var links = await db.Set<Dictionary<string, object>>("ProductCategories").AsNoTracking()
@@ -360,10 +372,10 @@ public static class CommerceEndpoints
         {
             if (request.Lines.Count == 0 || request.Lines.Any(line => line.Quantity < 1))
                 return Results.ValidationProblem(new Dictionary<string, string[]> { ["lines"] = ["An order needs at least one line with a positive quantity."] });
-            if (request.PaymentMethod is not PaymentMethod.Cash and not PaymentMethod.Card)
-                return Results.ValidationProblem(new Dictionary<string, string[]> { ["paymentMethod"] = ["Choose Cash or Card."] });
+            if (request.PaymentMethod is not (PaymentMethod.Cash or PaymentMethod.Card or PaymentMethod.SumUp or PaymentMethod.Stripe))
+                return Results.ValidationProblem(new Dictionary<string, string[]> { ["paymentMethod"] = ["Choose Cash, SumUp, Card or Stripe."] });
             if (!ValidPosEstimate(request.OrderType, request.EstimatedMinutes))
-                return Results.ValidationProblem(new Dictionary<string, string[]> { ["estimatedMinutes"] = ["Choose a valid estimate in 5-minute collection or 10-minute delivery increments."] });
+                return Results.ValidationProblem(new Dictionary<string, string[]> { ["estimatedMinutes"] = ["Choose a valid estimate in 5-minute increments."] });
 
             var variantIds = request.Lines.Select(line => line.VariantId).Distinct().ToList();
             var variants = await db.ProductVariants.Include(variant => variant.Product).ThenInclude(product => product.ModifierGroups).ThenInclude(link => link.ModifierGroup).ThenInclude(group => group.Modifiers)
@@ -396,18 +408,60 @@ public static class CommerceEndpoints
                 : null;
             order.Total = order.Subtotal + order.DeliveryFee + order.CustomFee;
             order.Payments.Add(new Payment { Method = request.PaymentMethod, Status = PaymentStatus.Pending, Amount = order.Total });
+            await using var tx = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable);
+            var startPreparing = !await db.Orders.AnyAsync(o => o.Status == OrderStatus.Preparing);
+            if (startPreparing) order.Status = OrderStatus.Preparing;
             order.StatusHistory.Add(new OrderStatusHistory { Status = OrderStatus.Draft,
                 Note = string.IsNullOrWhiteSpace(request.Source) ? "Order created" : $"Order created via {request.Source.Trim()}",
                 ChangedBy = staff.FindFirstValue(ClaimTypes.NameIdentifier) });
+            if (startPreparing)
+                order.StatusHistory.Add(new OrderStatusHistory { Status = OrderStatus.Preparing,
+                    Note = "Started preparing because the preparation queue was empty",
+                    ChangedBy = staff.FindFirstValue(ClaimTypes.NameIdentifier) });
             db.Orders.Add(order);
             await db.SaveChangesAsync();
+            await tx.CommitAsync();
             return Results.Created($"/api/orders/{order.OrderNumber}", new CreateOrderResponse(order.OrderNumber, order.Status, order.Total));
+        });
+
+        orders.MapPost("/customer-address", async (SaveCustomerAddressRequest request, AniseDbContext db) =>
+        {
+            if (!ValidSavedCustomerAddress(request.Name, request.Phone, request.Postcode, request.AddressLine1, request.AddressLine2))
+                return Results.ValidationProblem(new Dictionary<string, string[]> { ["customerAddress"] = ["Enter a name, a 7–30 digit phone number, a postcode and address line 1. Check field lengths."] });
+            var name = request.Name.Trim();
+            var phone = request.Phone.Trim();
+            var postcode = request.Postcode.Trim().ToUpperInvariant();
+            var line1 = request.AddressLine1.Trim();
+            var line2 = string.IsNullOrWhiteSpace(request.AddressLine2) ? null : request.AddressLine2.Trim();
+            var customer = await db.Customers.Include(c => c.Addresses)
+                .Where(c => c.Phone == phone).OrderBy(c => c.CreatedAtUtc).FirstOrDefaultAsync();
+            if (customer is null) { customer = new Customer { Phone = phone }; db.Customers.Add(customer); }
+            (customer.FirstName, customer.LastName) = CustomerNameParts(name);
+            customer.UpdatedAtUtc = DateTimeOffset.UtcNow;
+            var address = customer.Addresses.FirstOrDefault(a =>
+                string.Equals(a.Postcode?.Trim(), postcode, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(a.Line1.Trim(), line1, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(a.Line2?.Trim() ?? "", line2 ?? "", StringComparison.OrdinalIgnoreCase));
+            if (address is null) { address = new CustomerAddress { Customer = customer, Label = "Address" }; customer.Addresses.Add(address); }
+            foreach (var saved in customer.Addresses) saved.IsDefault = saved == address;
+            address.Line1 = line1; address.Line2 = line2; address.Postcode = postcode;
+            address.UpdatedAtUtc = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync();
+            return Results.Ok(new { message = "Customer address saved.", customerId = customer.Id, addressId = address.Id });
         });
 
         orders.MapGet("/address-by-phone", async (string phone, AniseDbContext db) =>
         {
             var compactPhone = phone.Trim().Replace(" ", "").Replace("-", "").Replace("(", "").Replace(")", "");
             if (compactPhone.Length < 7) return Results.NotFound();
+            var customer = await db.Customers.AsNoTracking().Include(c => c.Addresses)
+                .Where(c => c.Phone != null && c.Phone.Replace(" ", "").Replace("-", "").Replace("(", "").Replace(")", "") == compactPhone)
+                .OrderByDescending(c => c.UpdatedAtUtc ?? c.CreatedAtUtc).FirstOrDefaultAsync();
+            var savedAddress = customer?.Addresses.Where(a => !string.IsNullOrWhiteSpace(a.Line1) && !string.IsNullOrWhiteSpace(a.Postcode))
+                .OrderByDescending(a => a.IsDefault).ThenByDescending(a => a.CreatedAtUtc).FirstOrDefault();
+            if (savedAddress is not null)
+                return Results.Ok(new { customerName = string.Join(" ", new[] { customer!.FirstName, customer.LastName }.Where(part => !string.IsNullOrWhiteSpace(part))),
+                    deliveryAddress = string.Join("\n", new[] { savedAddress.Postcode, savedAddress.Line1, savedAddress.Line2 }.Where(part => !string.IsNullOrWhiteSpace(part))) });
             var match = await db.Orders.AsNoTracking()
                 .Where(o => o.OrderType == OrderType.Delivery && o.CustomerPhone != null && o.DeliveryAddress != null && o.DeliveryAddress != ""
                     && o.CustomerPhone.Replace(" ", "").Replace("-", "").Replace("(", "").Replace(")", "") == compactPhone)
@@ -582,6 +636,7 @@ public sealed record UpdateVariantRequest(string Name, decimal Price, bool IsAva
 public sealed record UpdateModifierGroupRequest(string Name, int MinimumSelections, int MaximumSelections);
 public sealed record UpdateModifierRequest(string Name, decimal PriceAdjustment, bool IsAvailable);
 public sealed record CreateOrderRequest(Guid? CustomerId, OrderType OrderType, PaymentMethod PaymentMethod, string? CustomerName, string? CustomerPhone, string? Notes, string? DeliveryAddress, decimal DeliveryFee, string? CustomFeeDescription, decimal CustomFee, string? Source, List<CreateOrderLineRequest> Lines, int? EstimatedMinutes = null);
+public sealed record SaveCustomerAddressRequest(string Name, string Phone, string Postcode, string AddressLine1, string? AddressLine2);
 public sealed record CreateOrderLineRequest(Guid VariantId, int Quantity, List<Guid> ModifierIds, string? Notes = null);
 public sealed record MenuCategoryResponse(Guid Id, string Name, string Slug, List<MenuProductResponse> Products);
 public sealed record MenuProductResponse(Guid Id, string Name, string Slug, string? Description, bool IsVegan, string? VeganSection, string? ChineseName, string? ImageUrl, List<MenuVariantResponse> Variants, List<MenuModifierGroupResponse> ModifierGroups);

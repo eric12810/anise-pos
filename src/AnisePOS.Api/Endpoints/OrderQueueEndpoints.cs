@@ -122,10 +122,14 @@ public static class OrderQueueEndpoints
             if (order is null) return Results.NotFound();
             if (order.Status != OrderStatus.Placed || !order.Payments.Any(p => p.Provider == "WebsiteCash" || (p.Provider == "StripeCheckout" && p.Status == PaymentStatus.Paid)))
                 return Results.Conflict(new { message = "This website order is no longer awaiting acceptance." });
-            order.Status = OrderStatus.Accepted;
+            var startPreparing = !await db.Orders.AnyAsync(o => o.Status == OrderStatus.Preparing, ct);
+            order.Status = startPreparing ? OrderStatus.Preparing : OrderStatus.Accepted;
             order.EstimatedAtUtc = body.EstimatedAtUtc.ToUniversalTime(); order.UpdatedAtUtc = now;
             db.OrderStatusHistory.Add(new OrderStatusHistory { OrderId = order.Id, Status = OrderStatus.Accepted,
                 ChangedBy = staff.FindFirstValue(ClaimTypes.NameIdentifier), Note = "Website order accepted; estimated time recorded" });
+            if (startPreparing)
+                db.OrderStatusHistory.Add(new OrderStatusHistory { OrderId = order.Id, Status = OrderStatus.Preparing,
+                    ChangedBy = staff.FindFirstValue(ClaimTypes.NameIdentifier), Note = "Started preparing because the preparation queue was empty" });
             await db.SaveChangesAsync(ct); await tx.CommitAsync(ct);
             return Results.Ok(new { orderNumber, order.Status, order.EstimatedAtUtc });
         });
@@ -207,8 +211,8 @@ public static class OrderQueueEndpoints
 
         queue.MapPut("/{orderNumber:long}/payment/method", async (long orderNumber, ChangePaymentMethod request, AniseDbContext db, ClaimsPrincipal staff, CancellationToken ct) =>
         {
-            if (request.Method is not PaymentMethod.Cash and not PaymentMethod.Card)
-                return Results.BadRequest(new { message = "Choose Cash or Card." });
+            if (request.Method is not (PaymentMethod.Cash or PaymentMethod.Card or PaymentMethod.SumUp or PaymentMethod.Stripe))
+                return Results.BadRequest(new { message = "Choose Cash, SumUp, Card or Stripe." });
             await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
             var payment = await db.Payments.Include(p => p.Order)
                 .Where(p => p.Order.OrderNumber == orderNumber)

@@ -95,7 +95,7 @@ public sealed class CustomerAddress : Entity
 
 public enum OrderType { Collection, Delivery }
 public enum OrderStatus { Draft, Placed, Accepted, Preparing, Ready, Completed, Cancelled, Refunded }
-public enum PaymentMethod { Cash, Card, Online, GiftCard, Other }
+public enum PaymentMethod { Cash, Card, Online, GiftCard, Other, SumUp, Stripe }
 public enum PaymentStatus { Pending, Authorised, Paid, Failed, Voided, Refunded, PartiallyRefunded, RefundPending }
 public enum StaffRole { Owner, Manager, Cashier }
 

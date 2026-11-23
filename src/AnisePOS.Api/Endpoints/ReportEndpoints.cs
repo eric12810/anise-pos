@@ -45,7 +45,10 @@ public static class ReportEndpoints
             var grossSales = orders.Sum(o => o.Total);
             var paidSales = payments.Sum(p => p.Amount);
             var cashSales = payments.Where(p => p.Method == PaymentMethod.Cash).Sum(p => p.Amount);
-            var cardSales = payments.Where(p => p.Method is PaymentMethod.Card or PaymentMethod.Online).Sum(p => p.Amount);
+            var cardSales = payments.Where(p => p.Method is PaymentMethod.Card or PaymentMethod.Online or PaymentMethod.SumUp or PaymentMethod.Stripe).Sum(p => p.Amount);
+            var sumUpSales = payments.Where(p => p.Method == PaymentMethod.SumUp).Sum(p => p.Amount);
+            var stripeSales = payments.Where(p => p.Method == PaymentMethod.Stripe).Sum(p => p.Amount);
+            var otherCardSales = cardSales - sumUpSales - stripeSales;
             var completedRefunds = refunds.Where(r => r.Status == RefundStatus.Completed).ToList();
             var pendingRefunds = refunds.Where(r => r.Status == RefundStatus.Pending).Sum(r => r.Amount);
             var refundTotal = completedRefunds.Sum(r => r.Amount);
@@ -66,7 +69,8 @@ public static class ReportEndpoints
                 source.Count(o => o.Status == OrderStatus.Refunded), days,
                 completedRefunds.Where(r => r.Method == PaymentMethod.Cash).Sum(r => r.Amount),
                 completedRefunds.Where(r => r.Method != PaymentMethod.Cash).Sum(r => r.Amount),
-                refundTotal, cashSales + cardSales - refundTotal, pendingRefunds);
+                refundTotal, cashSales + cardSales - refundTotal, pendingRefunds,
+                sumUpSales, stripeSales, otherCardSales);
     }
 
     public sealed record ReportOrder(DateTimeOffset CreatedAtUtc, OrderType OrderType, OrderStatus Status,
@@ -81,5 +85,6 @@ public sealed record SalesReportResponse(DateTimeOffset From, DateTimeOffset To,
     decimal CashSales, decimal CardSales, int CollectionOrders, int DeliveryOrders,
     int CancelledOrders, int RefundedOrders, List<DailySalesResponse> Days,
     decimal CompletedCashRefunds, decimal CompletedCardRefunds, decimal CompletedRefunds,
-    decimal NetPaidTakings, decimal PendingRefunds);
+    decimal NetPaidTakings, decimal PendingRefunds,
+    decimal SumUpSales = 0, decimal StripeSales = 0, decimal OtherCardSales = 0);
 public sealed record DailySalesResponse(DateOnly Date, int OrderCount, decimal GrossSales, decimal PaidSales);
