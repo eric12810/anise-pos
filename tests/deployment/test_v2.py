@@ -229,6 +229,21 @@ class V2Tests(unittest.TestCase):
         self.assertEqual(ftp.files["AnisePOS.Api.dll"], b"new")
         self.assertEqual(ftp.files["wwwroot/pos.html"], b"pos")
 
+    def test_verified_upload_retries_transient_ftps_failure(self):
+        ftp = FakeFTP()
+        real_put = ftp.put
+        attempts = 0
+        def flaky_put(name, content):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise RuntimeError("FTPS operation failed (curl exit 18)")
+            real_put(name, content)
+        with mock.patch.object(ftp, "put", side_effect=flaky_put), mock.patch.object(engine.time, "sleep"):
+            engine.verified_put(ftp, "retry.txt", b"verified")
+        self.assertEqual(attempts, 2)
+        self.assertEqual(ftp.files["retry.txt"], b"verified")
+
     def test_staging_recovery_uses_exact_last_healthy_artifact(self):
         ftp = FakeFTP()
         baseline(ftp, self.root)

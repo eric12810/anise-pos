@@ -97,5 +97,6 @@ if __name__ == "__main__":
         main()
     except Exception as error:
         # No server replies, passwords or raw evidence are printed.
-        print("V2 stopped safely:", type(error).__name__, file=sys.stderr)
+        safe_detail = str(error) if str(error).startswith(("FTPS operation failed (curl exit ", "FTPS download verification failed:")) else ""
+        print("V2 stopped safely:", type(error).__name__, safe_detail, file=sys.stderr)
         raise SystemExit(1)

@@ -24,9 +24,18 @@ def read_state(ftp, target, name):
 
 
 def verified_put(ftp, name, content):
-    ftp.put(name, content)
-    if sha256(ftp.get(name)).digest() != sha256(content).digest():
-        raise RuntimeError("FTPS download verification failed: " + name)
+    attempts = 3 if ftp.target.name == "staging" else 1
+    for attempt in range(attempts):
+        try:
+            ftp.put(name, content)
+            if sha256(ftp.get(name)).digest() != sha256(content).digest():
+                raise RuntimeError("FTPS download verification failed: " + name)
+            return
+        except RuntimeError as error:
+            if attempt == attempts - 1 or not str(error).startswith(("FTPS operation failed (curl exit ", "FTPS download verification failed:")):
+                raise
+            print("FTPS transfer retry:", name, "attempt", attempt + 2, flush=True)
+            time.sleep(attempt + 1)
 
 
 def publish_state(ftp, target, name, content):
