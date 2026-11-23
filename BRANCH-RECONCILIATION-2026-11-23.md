@@ -13,7 +13,7 @@ This is an investigation record, not approval to merge or deploy. The live POS a
 
 The run records establish the last successful deployments, but no read-only hosted manifest comparison was performed here. A later manual rollback or out-of-band upload would require separate verification.
 
-Local backup tags preserve the two branch heads and the production artifact commit: `backup/reconcile-2026-11-23-main`, `backup/reconcile-2026-11-23-staging`, and `backup/reconcile-2026-11-23-production-artifact`. These tags are local and have not been pushed. The checked-out staging worktree was clean before investigation. Other existing local worktrees were left intact.
+Backup tags preserve the two original branch heads and the production artifact commit: `backup/reconcile-2026-11-23-main`, `backup/reconcile-2026-11-23-staging`, and `backup/reconcile-2026-11-23-production-artifact`. They were published to GitHub without changing either branch. The checked-out staging worktree was clean before investigation. Other existing local worktrees were left intact.
 
 ## Branch differences
 
@@ -27,7 +27,7 @@ At the start of this review, the merge base was `bbfd19864093158a8d2123cc34bae6c
 ## Remaining review
 
 1. Read the live V2 deployment state or hosted release manifest without starting the API, and compare the release and artifact hash to the successful runs above.
-2. Preserve both branch heads remotely with names that do not match deployment triggers; the initial backup tags are local only.
+2. Keep the published backup tags available while reviewing the remaining deployment differences.
 3. Review PR #42. Then reconcile deployment tooling and workflow copies without replacing staging's working deploy/recovery path or production's manual gate, exact artifact resolution, pre-release backup, schema guard, and rollback. Review legacy workflow removal separately. A merge into `staging` would trigger its automatic deployment, so prepare that PR without merging it.
 4. Review the two staging-only reporting changes as a future production release candidate through the normal staging-artifact process. Do not copy them directly into `main` as though they were already deployed to production.
 5. Validate .NET, JavaScript, Python, migration checks, workflow YAML, package manifest and environment targets on any later deployment-tooling candidate before merge.
@@ -39,3 +39,5 @@ On the current staging checkout, `python3 scripts/check-migrations.py` passed it
 [PR #41](https://github.com/eric12810/anise-pos/pull/41) merged on 23 November 2026. The `main` application, migration, and application test source now matches production artifact source commit `7ef20b0` for those paths, and the PR build, tests, and package validation passed. The two later staging reporting changes remain intentionally absent from `main`. This merge did not deploy either POS application or change a database.
 
 The remaining application difference is limited to `wwwroot/end-of-day.html` and `wwwroot/reports.html`. Deployment workflows and modules still differ by environment. Draft [PR #42](https://github.com/eric12810/anise-pos/pull/42) narrows production artifact selection to the `staging` branch, removes the old manual release-branch staging path from the `main` workflow copy, and separates validation concurrency from staging deployment. Its GitHub build, tests, and package check passed; it has not merged. Branch histories remain divergent by design, and the deployment workflow differences require a separate review before declaring the repository fully reconciled.
+
+The latest successful staging run 45253210471 retains the unexpired artifact `anise-pos-v2-0761027bfa6d9d608bf6a89e8695eb557ab616b3`, whose run metadata names the `staging` branch and exact commit. The shared V2 package model and manifest preparation files are identical on both branches. This establishes format compatibility at the source and run-metadata level; no production deploy or live artifact installation was attempted. The staging and production deployment engines intentionally remain different to preserve their working recovery paths.
