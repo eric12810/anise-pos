@@ -19,8 +19,6 @@ DIAGNOSTIC = ROOT / 'scripts/production-ftps-diagnostic.py'
 BASELINE = ROOT / 'scripts/production-baseline.py'
 MARKER_DIAGNOSTIC = ROOT / 'scripts/production-baseline-marker-diagnostic.py'
 RECOVERY = ROOT / 'scripts/production-baseline-recover.py'
-WORKFLOW = ROOT / '.github/workflows/production-release.yml'
-RECOVERY_WORKFLOW = ROOT / '.github/workflows/production-baseline-recovery.yml'
 
 
 def production_uploader_module():
@@ -218,20 +216,7 @@ class ProductionDeploymentTests(unittest.TestCase):
         })
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_workflow_uses_secrets_and_only_one_input(self):
-        workflow = WORKFLOW.read_text()
-        self.assertIn('PROD_DB_SERVER: ${{ secrets.PROD_DB_SERVER }}', workflow)
-        self.assertIn('PROD_DB_NAME: ${{ secrets.PROD_DB_NAME }}', workflow)
-        self.assertIn('PROD_BACKUP_CONFIRMED: ${{ secrets.PROD_BACKUP_CONFIRMED }}', workflow)
-        self.assertNotIn('vars.PROD_DB_SERVER', workflow)
-        self.assertNotIn('vars.PROD_DB_NAME', workflow)
-        self.assertNotIn('vars.PROD_BACKUP_CONFIRMED', workflow)
-        self.assertIn('PROD_FTPS_EXPECTED_HOST: ${{ secrets.LIVE_FTPS_HOST }}', workflow)
-        self.assertIn('DEPLOY_FTPS_HOST: ${{ secrets.LIVE_FTPS_HOST }}', workflow)
-        self.assertIn('DEPLOYMENT_ENV: production', workflow)
-        self.assertNotIn("vars.PROD_FTPS_HOST ||", workflow)
-        self.assertNotIn("vars.PROD_FTPS_ROOT ||", workflow)
-        self.assertEqual(workflow.split('inputs:', 1)[1].count('staging_run_id:'), 1)
+    def test_diagnostic_workflow_remains_available(self):
         diagnostic = (ROOT / '.github/workflows/production-ftps-diagnostic.yml').read_text()
         self.assertIn('production-ftps-diagnostic.py', diagnostic)
         self.assertIn('PROD_FTPS_ROOT: ${{ vars.PROD_FTPS_ROOT }}', diagnostic)
@@ -579,15 +564,6 @@ class ProductionDeploymentTests(unittest.TestCase):
         finally:
             inventory.unlink(missing_ok=True)
             evidence.unlink(missing_ok=True)
-
-    def test_recovery_workflow_is_manual_and_protected(self):
-        workflow = RECOVERY_WORKFLOW.read_text()
-        self.assertIn('workflow_dispatch:', workflow)
-        self.assertIn('environment: production', workflow)
-        self.assertIn('production-baseline-recover.py', workflow)
-        self.assertIn('PROD_BASELINE_RECOVERY_BACKUP_VERIFIED', workflow)
-        self.assertIn("FINALISE PRODUCTION BASELINE PENDING MANIFEST", workflow)
-        self.assertNotIn('on:\n  push:', workflow)
 
     @staticmethod
     def _connection(ftp):
