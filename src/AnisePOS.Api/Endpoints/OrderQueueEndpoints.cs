@@ -58,7 +58,7 @@ public static class OrderQueueEndpoints
             return await db.Orders.AsNoTracking()
                 .Where(o => o.Status == OrderStatus.Draft || o.Status == OrderStatus.Placed ||
                     o.Status == OrderStatus.Accepted || o.Status == OrderStatus.Preparing || o.Status == OrderStatus.Ready)
-                .OrderBy(o => o.CreatedAtUtc).ThenBy(o => o.OrderNumber)
+                .OrderBy(o => o.CreatedAtUtc).ThenBy(o => o.Id)
                 .Select(o => new QueueOrder(o.OrderNumber, o.Status, o.OrderType, o.CreatedAtUtc,
                     o.CustomerName, o.CustomerPhone, o.DeliveryAddress, o.Notes, o.EstimatedAtUtc, o.Total,
                     o.Payments.OrderByDescending(p => p.CreatedAtUtc).Select(p => (PaymentMethod?)p.Method).FirstOrDefault(),

@@ -112,7 +112,7 @@ public static class WebsiteStripeWebhook
                 if (!string.IsNullOrEmpty(snapshot.ProtectedConfirmation))
                     db.WebsiteConfirmations.Add(new WebsiteConfirmation { Order = order, ProtectedPayload = snapshot.ProtectedConfirmation });
                 checkout.CompletedOrderId = order.Id; checkout.ReconciliationError = null; checkout.UpdatedAtUtc = now;
-                await db.SaveChangesAsync(ct);
+                if (!await OrderNumbers.SaveNewOrderAsync(db, order, ct)) return Results.Problem("Could not allocate an order number. Please retry.", statusCode: 503);
                 await transaction.CommitAsync(ct);
                 return Results.Ok();
     }

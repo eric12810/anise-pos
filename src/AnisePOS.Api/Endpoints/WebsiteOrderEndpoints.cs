@@ -391,7 +391,7 @@ public static class WebsiteOrderEndpoints
                 db.WebsiteConfirmations.Add(new WebsiteConfirmation { Order = order,
                     ProtectedPayload = protection.CreateProtector("Anise.WebsiteConfirmation.v1").Protect(System.Text.Json.JsonSerializer.Serialize(payload)) });
             }
-            try { await db.SaveChangesAsync(ct); }
+            try { if (!await OrderNumbers.SaveNewOrderAsync(db, order, ct)) return Results.Problem("Could not allocate an order number. Please retry.", statusCode: 503); }
             catch (DbUpdateException)
             {
                 var duplicate = await db.Payments.AsNoTracking().Where(p => p.Provider == "WebsiteCash" && p.ProviderReference == reference)

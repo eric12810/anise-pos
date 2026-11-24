@@ -237,7 +237,7 @@ function render(orders) {
     closePaymentDropdown();
     for (const [id, title] of [['new', 'New'], ['preparing', 'Preparing'], ['ready', 'Ready']]) {
         const items = orders.filter(o => id === 'new' ? ['Draft', 'Placed', 'Accepted'].includes(o.status)
-            : o.status.toLowerCase() === id).sort((a, b) => { const direction = id === 'new' ? -1 : 1; return direction * ((Date.parse(a.createdAtUtc) || 0) - (Date.parse(b.createdAtUtc) || 0) || a.orderNumber - b.orderNumber); });
+            : o.status.toLowerCase() === id).sort((a, b) => { const direction = id === 'new' ? -1 : 1; return direction * ((Date.parse(a.createdAtUtc) || 0) - (Date.parse(b.createdAtUtc) || 0)) || String(a.id || a.orderNumber).localeCompare(String(b.id || b.orderNumber)); });
         const target = document.getElementById(id);
         target.replaceChildren();
         document.getElementById(id + '-title').textContent = title + ' (' + items.length + ')';

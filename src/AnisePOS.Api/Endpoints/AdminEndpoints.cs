@@ -138,7 +138,7 @@ public static class AdminEndpoints
                 c.Id, c.FirstName, c.LastName, c.Email, c.Phone, c.CreatedAtUtc, c.UpdatedAtUtc,
                 Addresses = c.Addresses.Select(a => new { a.Id, a.Label, a.Line1, a.Line2, a.City, a.Postcode, a.IsDefault }).ToList()
             }).ToListAsync(ct);
-            var orders = await db.Orders.AsNoTracking().OrderBy(x => x.OrderNumber).Select(o => new
+            var orders = await db.Orders.AsNoTracking().OrderBy(x => x.CreatedAtUtc).ThenBy(x => x.Id).Select(o => new
             {
                 o.Id, o.OrderNumber, o.CustomerId, o.OrderType, o.Status, o.CustomerName, o.CustomerPhone,
                 o.DeliveryAddress, o.Notes, o.Subtotal, o.DiscountTotal, o.DeliveryFee,

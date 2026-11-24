@@ -13,6 +13,15 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using WebPush;
 
+for (var i = 0; i < 10000; i++)
+{
+    var number = OrderNumbers.Generate();
+    if (number is < 100000 or > 999999 || number.ToString().Length != 6)
+        throw new Exception("Random order number is outside the six-digit range.");
+}
+if (OrderNumbers.MaximumAttempts < 2) throw new Exception("Order number collisions must be retried.");
+Console.WriteLine("Passed random order number range checks.");
+
 // Run the production-only EF schema mapping without opening a SQL connection.
 var callerNow = DateTimeOffset.UtcNow;
 var callerId = Guid.NewGuid();

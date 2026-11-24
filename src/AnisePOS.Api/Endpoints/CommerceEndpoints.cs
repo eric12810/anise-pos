@@ -354,7 +354,7 @@ public static class CommerceEndpoints
             if (to.HasValue) ordersQuery = ordersQuery.Where(o => o.CreatedAtUtc < to.Value);
 
             var totalCount = await ordersQuery.CountAsync();
-            var items = await ordersQuery.OrderByDescending(o => o.CreatedAtUtc).ThenByDescending(o => o.OrderNumber)
+            var items = await ordersQuery.OrderByDescending(o => o.CreatedAtUtc).ThenByDescending(o => o.Id)
                 .Skip((page - 1) * pageSize).Take(pageSize)
                 .Select(o => new OrderHistoryItemResponse(o.OrderNumber, o.CreatedAtUtc, o.OrderType, o.Status,
                     o.CustomerName, o.CustomerPhone, o.Total, o.Lines.Sum(l => l.Quantity),
@@ -419,7 +419,7 @@ public static class CommerceEndpoints
                     Note = "Started preparing because the preparation queue was empty",
                     ChangedBy = staff.FindFirstValue(ClaimTypes.NameIdentifier) });
             db.Orders.Add(order);
-            await db.SaveChangesAsync();
+            if (!await OrderNumbers.SaveNewOrderAsync(db, order)) return Results.Problem("Could not allocate an order number. Please try again.", statusCode: 503);
             await tx.CommitAsync();
             return Results.Created($"/api/orders/{order.OrderNumber}", new CreateOrderResponse(order.OrderNumber, order.Status, order.Total));
         });
