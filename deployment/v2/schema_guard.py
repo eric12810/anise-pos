@@ -8,6 +8,13 @@ CALLER_RELEASE = "0733b67507f85523b48192fff54e17d869bc5955"
 CALLER_APPROVAL = "APPROVE CALLER SCHEMA RELEASE"
 STRIPE_SHORTCUT_RELEASE = "0de2e5734149f5a998feaeb2ce938e4f38de9369"
 STRIPE_SHORTCUT_APPROVAL = "APPROVE POS SHORTCUT RELEASE 0de2e57"
+ORDER_NUMBER_RELEASE = "2ce0a96a7d395462000120ad7567945e7bb2d3b7"
+ORDER_NUMBER_APPROVAL = "APPROVE RANDOM ORDER NUMBERS 2ce0a96"
+ORDER_NUMBER_CHANGES = {
+    "database/014_random_order_numbers.sql",
+    "src/AnisePOS.Api/Data/AniseDbContext.cs",
+    "src/AnisePOS.Api/Data/OrderNumbers.cs",
+}
 STRIPE_SHORTCUT_CHANGES = {
     "database/production/create_caller_events.sql",
     "database/production/inspect_caller_events.sql",
@@ -46,6 +53,8 @@ def check(current, candidate, approval="", release=""):
     if changed and approval == CALLER_APPROVAL and release == CALLER_RELEASE and set(changed) == CALLER_CHANGES:
         return True
     if changed and approval == STRIPE_SHORTCUT_APPROVAL and release == STRIPE_SHORTCUT_RELEASE and set(changed) == STRIPE_SHORTCUT_CHANGES:
+        return True
+    if changed and approval == ORDER_NUMBER_APPROVAL and release == ORDER_NUMBER_RELEASE and set(changed) == ORDER_NUMBER_CHANGES:
         return True
     if changed:
         raise ValueError("Database requirements changed; use a separately approved schema release: "
