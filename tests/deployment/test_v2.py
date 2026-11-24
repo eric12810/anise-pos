@@ -645,6 +645,26 @@ class V2Tests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Database requirements changed"):
                 schema_guard.check(current, candidate, approval, release)
 
+    def test_order_number_schema_release_requires_exact_approval_artifact_and_changes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            current, candidate = Path(folder) / "current", Path(folder) / "candidate"
+            for root in (current, candidate):
+                (root / "src/AnisePOS.Api/Data").mkdir(parents=True)
+                (root / "database").mkdir()
+                (root / "src/AnisePOS.Api/Program.cs").write_text("startup")
+                (root / "src/AnisePOS.Api/Data/AniseDbContext.cs").write_text("old")
+            (candidate / "src/AnisePOS.Api/Data/AniseDbContext.cs").write_text("new")
+            (candidate / "src/AnisePOS.Api/Data/OrderNumbers.cs").write_text("generator")
+            (candidate / "database/014_random_order_numbers.sql").write_text("migration")
+            approval, release = schema_guard.ORDER_NUMBER_APPROVAL, schema_guard.ORDER_NUMBER_RELEASE
+            self.assertTrue(schema_guard.check(current, candidate, approval, release))
+            for bad_approval, bad_release in (("", release), (approval, "0" * 40)):
+                with self.assertRaisesRegex(ValueError, "Database requirements changed"):
+                    schema_guard.check(current, candidate, bad_approval, bad_release)
+            (candidate / "database/015_unrelated.sql").write_text("ALTER TABLE")
+            with self.assertRaisesRegex(ValueError, "Database requirements changed"):
+                schema_guard.check(current, candidate, approval, release)
+
     def test_protected_manual_snapshot_expansion_is_bounded_and_private(self):
         raw = b'{"database":"anisedatabase","columns":[]}'
         encoded = base64.b64encode(zlib.compress(raw)).decode()
